@@ -38,3 +38,4 @@ terraform.rc
 
 # Ignore data directory
 animals-detection-images-dataset/*
+checkpoints/*
