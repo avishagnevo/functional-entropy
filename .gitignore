@@ -37,4 +37,4 @@ override.tf.json
 terraform.rc
 
 # Ignore data directory
-data/*
+animals-detection-images-dataset/*
