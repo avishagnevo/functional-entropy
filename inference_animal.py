@@ -69,7 +69,7 @@ print("Regularization parameters initialized. Using variance-based estimation.")
 images_pixels_importance = []
 for batch_idx, (images, batch_labels) in enumerate(valid_loader):
     print(f"Processing batch {batch_idx+1}/{len(valid_loader)}...")
-    pixels_importance = []
+    #pixels_importance = []
     
     # Move the batch to the device (GPU if available)
     images = images.to(device)
@@ -85,6 +85,51 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
     expanded_logits = Perturbation.get_expanded_logits(logits, reg_params.n_samples)
     print(f"Expanded logits shape: {expanded_logits.shape}")  # Expected: (batch * n_samples, num_classes)
     
+    pixels_subsets = [[0]]
+    subsets_importance = []
+    images_subsets_importance = []
+
+    for pixels in pixels_subsets:
+        # Perturb input images using the helper function
+        inf_images = Perturbation.perturb_tensor_subset(images, pixels , reg_params.n_samples)
+        #print(f"Perturbed images shape: {inf_images.shape}")  # Expected: (batch * n_samples, 3, 224, 224)
+        
+        # Forward pass on the perturbed images
+        inf_output = model(inf_images)
+        #print(f"Inference output shape: {inf_output.shape}")  # Expected: (batch * n_samples, num_classes)
+        
+        # Compute binary cross entropy loss with logits (targets: expanded_logits)
+        inf_loss = nn.functional.binary_cross_entropy_with_logits(inf_output, expanded_logits)
+        print(f"Computed loss: {inf_loss.item():.4f}")
+        
+        # Compute gradients of the loss with respect to the perturbed images
+        gradients = torch.autograd.grad(inf_loss, [inf_images], create_graph=True)
+        print(f"Gradients computed. Shape: {gradients[0].shape}")  # Expected: (batch * n_samples, 3, 224, 224)
+        
+        # Process gradients with the batch normalization helper
+        grads = [Regularization.get_batch_norm(gradients[0], loss=inf_loss, estimation='var')]
+        print(f"Gradient batch norm shape: {grads[0].shape}")
+        print(f"Gradient batch norm: {grads[0]}")
+        
+        # Stack gradients and compute the regularization term
+        inf_scores = torch.stack(grads)
+        print(f"Stacked gradients shape: {inf_scores.shape}")
+        print(f"Stacked gradients: {inf_scores}")
+        
+        reg_term = Regularization.get_regularization_term(inf_scores, norm=reg_params.norm,
+                                                        optim_method=reg_params.optim_method)
+        print(f"Regularization Term (Variance-based): {reg_term.item():.4f}")
+
+        subsets_importance.append(reg_term.item())
+    
+    images_subsets_importance.append(subsets_importance)
+
+    break  # Process only the first image for demonstration
+
+print("Regularization term calculation complete.")
+
+
+'''
     images_dim = list(images.shape)
     max_pixel = images_dim[-2]*images_dim[-1]
 
@@ -122,9 +167,4 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
         pixels_importance.append(reg_term.item())
     
         break  # Process only the first pixel for demonstration
-    
-    images_pixels_importance.append(pixels_importance)
-
-    break  # Process only the first image for demonstration
-
-print("Regularization term calculation complete.")
+    '''

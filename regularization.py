@@ -41,6 +41,33 @@ class Perturbation:
         return pertubated_tens  
 
     @classmethod
+    def _add_noise_to_tensor_subset(cls, tens: torch.Tensor, pixels: list[int] , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
+        """
+        Adds noise to a tensor sampled from N(0, tens.std()).
+        :param tens:
+        :param pixels: pixels index to include in perturbation
+        :param num_channels: number of channels in the tensor
+        :param over_dim: over what dim to calculate the std. 0 for features over batch,  1 for over sample.
+        :return: noisy tensor in the same shape as input
+        """
+        pertube_flags = torch.zeros_like(tens.std(dim=over_dim))
+        jump = tens.shape[-1]//num_channels
+
+        for pixel in pixels:
+            for channel in range(num_channels):
+                pertube_flags[pixel + channel * jump] = 1
+
+        pertubated_tens = tens.clone() + torch.randn_like(tens) * pertube_flags
+
+        for pixel in pixels:
+            for channel in range(num_channels):
+                print('!=', pertubated_tens[:, pixel + channel * jump])
+                print('!=',tens[:, pixel + channel * jump])
+                print('=', pertubated_tens[:, pixel + channel * jump +1])
+                print('=',tens[:, pixel + channel * jump +1])
+        return pertubated_tens      
+
+    @classmethod
     def perturb_tensor(cls, tens: torch.Tensor, n_samples: int, perturbation: bool = True) -> torch.Tensor:
         """
         Flatting the tensor, expanding it, perturbing and reconstructing to the original shape.
@@ -104,6 +131,45 @@ class Perturbation:
         tens.requires_grad_()
 
         return tens    
+
+    @classmethod
+    def perturb_tensor_subset(cls, tens: torch.Tensor, pixels: list[int], n_samples: int, perturbation: bool = True) -> torch.Tensor:
+        """
+        Flatting the tensor, expanding it, perturbing exept from pixel and reconstructing to the original shape.
+        Note, this function assumes that the batch is the first dimension.
+        :param tens:
+        :param pixels: pixels index to include in perturbation
+        :param n_samples: times to perturb
+        :param perturbation: False - only duplicating the tensor
+        :return: tensor in the shape of [batch, samples * num_eval_samples]
+        """
+        ''''''
+        tens = torch.zeros_like(tens.clone())
+        pixel=pixels[0]
+        ones = torch.ones_like(tens[:,:,pixel,pixel].clone())
+        tens[:,:,pixel,pixel] = ones
+        
+        tens_dim = list(tens.shape)
+        max_pixel = tens_dim[-2]*tens_dim[-1]
+        num_channels=tens_dim[1]
+
+        for pixel in pixels:
+            assert pixel < max_pixel, f"Pixel index {pixel} is out of range 0:{max_pixel}"
+
+        tens = tens.view(tens.shape[0], -1)
+        tens = tens.repeat(1, n_samples)
+
+        tens = tens.view(tens.shape[0] * n_samples, -1)
+
+        if perturbation:
+            tens = cls._add_noise_to_tensor_subset(tens, pixels, num_channels)
+
+        tens_dim[0] *= n_samples
+
+        tens = tens.view(*tens_dim)
+        tens.requires_grad_()
+
+        return tens        
 
     @classmethod
     def get_expanded_logits(cls, logits: torch.Tensor, n_samples: int, logits_flg: bool = True) -> torch.Tensor:
