@@ -5,6 +5,9 @@ import torchvision
 import detectors
 import timm
 import torchvision.models as models
+import torch.nn.functional as F
+import torch.nn.functional as F
+from functorch import vmap, grad
 
 
 model = timm.create_model("resnet50_cifar10", pretrained=True)
@@ -67,5 +70,9 @@ class AnimalClassifier(nn.Module):
         x = self.relu2(x)
         x = self.fc3(x)
         return x
+
+    def model_softmax(self, x):
+        return F.softmax(self(x), dim=1)
+
 
 
