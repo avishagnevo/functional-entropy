@@ -1,6 +1,8 @@
 import os
 import zipfile
-
+import os
+import cv2 as cv
+import numpy as np
 import pytorch_lightning as pl
 import requests
 from torch.utils.data import DataLoader
@@ -84,3 +86,88 @@ class CIFAR10Data(pl.LightningDataModule):
 
     def test_dataloader(self):
         return self.val_dataloader()
+
+
+def get_train_data():
+    import os
+    import cv2 as cv
+    import numpy as np
+
+    train_dir = 'animals-detection-images-dataset/train/'
+
+    # List of labels from directory names
+    listdir = os.listdir(train_dir)
+    labels = [label for label in listdir] #if label != '.DS_Store']
+    label_len = len(labels)
+    print(label_len)
+    print(labels)
+
+    # Lists to store training data
+    X = []
+    Y = []
+
+    # Load the data
+    for label in labels:
+        if label == '.DS_Store':
+            continue
+        folder_path = os.path.join(train_dir, label)
+        for file in os.listdir(folder_path):
+            img_path = os.path.join(folder_path, file)
+            img = cv.imread(img_path)
+            if img is not None:
+                # Resize image to 224x224
+                img = cv.resize(img, (224, 224))
+                X.append(img)
+                Y.append(labels.index(label))
+
+    # Convert lists to NumPy arrays
+    X = np.array(X)
+    Y = np.array(Y)
+
+    print("Training data dimensions:")
+    print("X shape:", X.shape)
+    print("Y shape:", Y.shape)
+
+    return train_dir, labels, X, Y
+
+
+
+def get_valid_data():
+
+    test_dir = 'animals-detection-images-dataset/test/'
+
+    # List of labels from directory names
+    listdir = os.listdir(test_dir)
+    labels = [label for label in listdir] #if label != '.DS_Store']
+    label_len = len(labels)
+    print(label_len)
+
+    # Variables for validation data
+    X_valid = []
+    Y_valid = []
+    X_valid_path = []
+
+    # Load validation data
+    for label in labels:
+        if label == '.DS_Store':
+            continue
+        folder_path = os.path.join(test_dir, label)
+        for file in os.listdir(folder_path):
+            img_path = os.path.join(folder_path, file)
+            img = cv.imread(img_path)
+            if img is not None:
+                # Resize image to 224x224
+                img = cv.resize(img, (224, 224))
+                X_valid.append(img)
+                X_valid_path.append(img_path)
+                Y_valid.append(labels.index(label))
+            break    
+
+    X_valid = np.array(X_valid)
+    Y_valid = np.array(Y_valid)
+
+    print("\nValidation data dimensions:")
+    print("X_valid shape:", X_valid.shape)
+    print("Y_valid shape:", Y_valid.shape)  
+
+    return test_dir, labels, X_valid, Y_valid  
