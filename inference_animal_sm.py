@@ -70,6 +70,9 @@ print("Regularization parameters initialized. Using variance-based estimation.")
 
 # --- Regularization Term Computation Loop ---
 images_pixels_importance = []
+images_subsets_importance[batch_idx]['ground_truth'] = 0
+images_subsets_importance[batch_idx]['predicted'] = 0
+
 for batch_idx, (images, batch_labels) in enumerate(valid_loader):
     print(f"Processing batch {batch_idx+1}/{len(valid_loader)}...")
     #pixels_importance = []
@@ -78,19 +81,25 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
     images = images.to(device)
     batch_labels = batch_labels.to(device)
     #print(f"Input images shape: {images.shape}")  # Expected: (batch, 3, 224, 224)
+    print(f"Batch labels shape: {batch_labels.shape}")  # Expected: (batch)
+    ground_truth_label = batch_labels.item()
     
     # Forward pass: compute logits
     logits = model(images)
-    print(f"Logits shape: {logits.shape}")  # Expected: (8, num_classes)
-    print(f"Batch labels: {batch_labels}")
+    print(f"Logits shape: {logits.shape}")  # Expected: (batch, num_classes)
+
+    # Compute the predicted labels for each image in the batch
+    predicted_labels = torch.argmax(logits, dim=1)
+    print(f"Predicted labels shape: {predicted_labels.shape}") # Expected: (batch)
+    predicted_label = predicted_labels.item()
     
     # Compute expanded logits (replicates logits for n_samples)
-    expanded_logits = Perturbation.get_expanded_logits(logits, reg_params.n_samples)
-    print(f"Expanded logits shape: {expanded_logits.shape}")  # Expected: (batch * n_samples, num_classes)
+    #expanded_logits = Perturbation.get_expanded_logits(logits, reg_params.n_samples)
+    #print(f"Expanded logits shape: {expanded_logits.shape}")  # Expected: (batch * n_samples, num_classes)
     
-    pixels_subsets = [[0]]
-    subsets_importance = []
-    images_subsets_importance = []
+    pixels_subsets = [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9]]
+    subsets_importance = {}
+    images_subsets_importance = {}
 
     for pixels in pixels_subsets:
 
@@ -101,21 +110,11 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
         # Forward pass on the perturbed images
         inf_output = model(inf_images)
         #print(f"Inference output shape: {inf_output.shape}")  # Expected: (batch * n_samples, num_classes)
-        
-        # Compute binary cross entropy loss with logits (targets: expanded_logits)
-        #inf_loss = nn.functional.binary_cross_entropy_with_logits(inf_output, expanded_logits)
-        #print(f"Computed loss: {inf_loss.item():.4f}")
-        #inf_softmax = nn.functional.softmax(inf_output, dim=1)
-        #print(f"Softmax output shape: {inf_softmax.shape}") # shape (batch * n_samples, num_classes)
-        
-        # Compute gradients of the loss with respect to the perturbed images
-        #gradients = torch.autograd.grad(inf_loss, [inf_images], create_graph=True)
-        #print(f"Gradients computed. Shape: {gradients[0].shape}")  # Expected: (batch * n_samples, 3, 224, 224)
-        #gradients = torch.autograd.grad(inf_softmax, [inf_images], create_graph=True)
-        #print(f"Gradients computed. Shape: {gradients[0].shape}")  # Expected: (batch * n_samples, 3, 224, 224)
-        #print(f"Gradients computed. Shape: {gradients[0].shape}")  # Expected: (batch * n_samples, 3, 224, 224)
-        importance_wrt_labels = []
-        for label in range(num_classes):
+
+        importance_wrt_labels = {}
+        subsets_importance['ground_truth'] = 0
+        subsets_importance['predicted'] = 0
+        for label in [ground_truth_label, predicted_label]:
 
             # Define a function that, for a single image (shape: (C, H, W)), computes the softmax probability for the chosen label.
             def f(x):
@@ -126,7 +125,6 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
                 out_sm = F.softmax(out, dim=1)           # shape: (1, num_classes)
                 return out_sm[0, label_idx]              # return the probability for label_idx
                 
-
             # Create a function to compute the gradient of f with respect to its input.
             grad_f = torch.func.grad(f)
 
@@ -134,27 +132,29 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
             gradients = torch.vmap(grad_f)(inf_images)  # Expected shape: (B, C, H, W)
             print("Per-sample gradient shape:", gradients.shape) # ([10, 3, 224, 224])
             
-            # Process gradients with the batch normalization helper
-            grads = [Regularization.get_batch_norm(gradients[0], estimation='var')]
-            print(f"Gradient batch norm shape: {grads[0].shape}")
-            print(f"Gradient batch norm: {grads[0]}")
-            
-            # Stack gradients and compute the regularization term
-            inf_scores = torch.stack(grads)
-            print(f"Stacked gradients shape: {inf_scores.shape}")
-            print(f"Stacked gradients: {inf_scores}")
-            
-            reg_term = Regularization.get_regularization_term(inf_scores, norm=reg_params.norm,
-                                                            optim_method=reg_params.optim_method)
-            print(f"Importance Term (Variance-based): {reg_term.item():.4f}")
+            # Calculate the expectation of the batch gradient
+            importance = Regularization.get_batch_norm(gradients, estimation='var')
+            print(f"Gradient batch norm shape: {importance.shape}") # shape 0
+            print(f"Gradient batch norm: {importance}")
 
-            importance_wrt_labels.append(reg_term.item())
-            break # Process only the first label for demonstration
+            #reg_term = Regularization.get_regularization_term(inf_scores, norm=reg_params.norm, optim_method=reg_params.optim_method)
+            print(f"Importance Term (Variance-based): {importance:.4f}")
 
-        subsets_importance.append(importance_wrt_labels)
-        break # Process only the first pixels subset for demonstration    
+            if label == ground_truth_label:
+                importance_wrt_labels['ground_truth'] = importance
+            else:
+                importance_wrt_labels['predicted'] = importance    
+            #break # Process only the first label for demonstration
+
+        subsets_importance['ground_truth'] += importance_wrt_labels['ground_truth']
+        subsets_importance['predicted'] += importance_wrt_labels['predicted']
+        #break # Process only the first pixels subset for demonstration    
     
-    images_subsets_importance.append(subsets_importance)
+    images_subsets_importance[batch_idx]['ground_truth'] += subsets_importance['ground_truth']
+    images_subsets_importance[batch_idx]['predicted'] += subsets_importance['predicted']
+
+    print(images_subsets_importance[batch_idx]['ground_truth'])
+    print(images_subsets_importance[batch_idx]['predicted'])
     break  # Process only the first image for demonstration
 
-print("Regularization term calculation complete.")
+print("Imporatance calculation complete.")

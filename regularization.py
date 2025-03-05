@@ -59,12 +59,15 @@ class Perturbation:
 
         pertubated_tens = tens.clone() + torch.randn_like(tens) * pertube_flags
 
+        '''
         for pixel in pixels:
             for channel in range(num_channels):
                 print('!=', pertubated_tens[:, pixel + channel * jump])
                 print('!=',tens[:, pixel + channel * jump])
                 print('=', pertubated_tens[:, pixel + channel * jump +1])
                 print('=',tens[:, pixel + channel * jump +1])
+        '''        
+        
         return pertubated_tens      
 
     @classmethod
@@ -192,7 +195,7 @@ class Regularization(object):
     Class that in charge of the regularization techniques
     """
     @classmethod
-    def _get_variance(cls, loss: torch.Tensor) -> torch.Tensor:
+    def _get_variance_loss(cls, loss: torch.Tensor) -> torch.Tensor:
         """
         Computes the variance along samples for the first dimension in a tensor
         :param loss: [batch, number of evaluate samples]
@@ -200,6 +203,16 @@ class Regularization(object):
         """
 
         return torch.var(loss, dim=1)
+
+    @classmethod
+    def _get_variance(cls, softmaxs: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the variance along samples for the first dimension in a tensor
+        :param softmaxs: [batch, number of evaluate samples]
+        :return: variance of a given batch of softmax values
+        """
+
+        return torch.var(softmaxs, dim=1)    
 
     @classmethod
     def _get_differential_entropy(cls, loss: torch.Tensor) -> torch.Tensor:
@@ -249,7 +262,7 @@ class Regularization(object):
     @classmethod
     def get_batch_norm(cls, grad: torch.Tensor, loss: torch.Tensor = None, estimation: str = 'ent') -> torch.Tensor:
         """
-        Calculate the expectation of the batch gradient
+        Calculate the expectation of the batch gradient norms squered
         :param loss:
         :param estimation:
         :param grad: tensor holds the gradient batch
