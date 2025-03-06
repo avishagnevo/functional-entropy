@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms as T
 from torchvision.datasets import CIFAR10
 from tqdm import tqdm
+import json
+
 
 
 class CIFAR10Data(pl.LightningDataModule):
@@ -96,8 +98,10 @@ def get_train_data():
     train_dir = 'animals-detection-images-dataset/train/'
 
     # List of labels from directory names
-    listdir = os.listdir(train_dir)
-    labels = [label for label in listdir] #if label != '.DS_Store']
+    #listdir = os.listdir(train_dir)
+    #labels = [label for label in listdir] #if label != '.DS_Store']
+    config = load_config('config.json')
+    labels = config.get('labels', [])
     label_len = len(labels)
     print(label_len)
     print(labels)
@@ -137,8 +141,12 @@ def get_valid_data():
     test_dir = 'animals-detection-images-dataset/test/'
 
     # List of labels from directory names
-    listdir = os.listdir(test_dir)
-    labels = [label for label in listdir] #if label != '.DS_Store']
+    #listdir = os.listdir(test_dir)
+    #labels = [label for label in listdir] #if label != '.DS_Store']
+    # Load configuration
+    config = load_config('config.json')
+    labels = config.get('labels', [])
+    print("Chosen labels:", labels)
     label_len = len(labels)
     print(label_len)
 
@@ -171,3 +179,16 @@ def get_valid_data():
     print("Y_valid shape:", Y_valid.shape)  
 
     return test_dir, labels, X_valid, Y_valid  
+
+
+
+def load_config(config_path: str) -> dict:
+    """
+    Loads the configuration from a JSON file.
+    
+    :param config_path: Path to the JSON config file.
+    :return: A dictionary with configuration parameters.
+    """
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
