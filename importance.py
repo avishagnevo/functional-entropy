@@ -9,11 +9,11 @@ import torch.nn.functional as F
 from regularization import Perturbation, Regularization, RegParameters
 from models import AnimalClassifier
 from data import get_train_data, get_valid_data
-from functorch import vmap, grad
+from typing import List  
+#from functorch import vmap, grad
 
 # Automatically set the device (GPU if available, else CPU)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 # =============================================================================
 # Utility Functions
@@ -51,7 +51,7 @@ def compute_importance(gradients: torch.Tensor, estimation: str = 'var') -> floa
     return importance
 
 
-def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: list[int], 
+def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: List[int], 
                               label_idx: int, reg_params: RegParameters) -> float:
     """
     Computes the importance measure for a subset of pixels for a given label by perturbing the images on that subset,
@@ -88,16 +88,88 @@ def aggregate_importance_scores(subsets_importance: dict) -> dict:
     predicted_total = sum(score_dict['predicted'] for score_dict in subsets_importance.values())
     return {'ground_truth_total': ground_truth_total, 'predicted_total': predicted_total}
 
+import os
+import cv2 as cv
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+
+def generate_saliency_map(image_path: str, model: torch.nn.Module, labels: list, reg_params: RegParameters) -> None:
+    """
+    Loads an image from the given path, extracts ground-truth labels from the filename 
+    (expected format: "Label1_Label2.png"), computes the per-pixel gradient (saliency map) 
+    for each label, and displays the original image with the saliency maps.
+    
+    The saliency map is computed by calculating the gradient of the softmax probability 
+    (for the chosen label) with respect to the input image. The gradient is then reduced 
+    by taking the maximum absolute value across channels.
+    
+    :param image_path: Path to the image file.
+    :param model: The classification model.
+    :param labels: List of valid labels. The image filename must contain two labels 
+                   (separated by an underscore) that are present in this list.
+    :param reg_params: Regularization parameters (used to set the estimation method and number of samples).
+    :return: None. Displays the original image and its saliency maps.
+    """
+    # Load and preprocess the image
+    img = cv.imread(image_path)
+    if img is None:
+        print(f"Error loading image from {image_path}")
+        return
+    # Convert from BGR to RGB and resize to (224, 224)
+    img = cv.cvtColor(img, cv.COLOR_BGR2RGB)
+    img = cv.resize(img, (224, 224))
+    
+    # Convert image to tensor (shape: (1, 3, 224, 224)) and normalize to [0,1]
+    img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
+    img_tensor = img_tensor.unsqueeze(0).to(device)  # Add batch dimension
+    
+    # Parse the filename to extract ground truth labels
+    base_name = os.path.basename(image_path)
+    name_no_ext, _ = os.path.splitext(base_name)
+    gt_labels = name_no_ext.split('_')
+    if len(gt_labels) < 2:
+        print("Warning: Less than 2 labels found in the filename. Expected format: Label1_Label2.png")
+    
+    saliency_maps = {}
+    for label in gt_labels:
+        try:
+            label_idx = labels.index(label)
+        except ValueError:
+            print(f"Label '{label}' not found in the provided labels list.")
+            continue
+        # Ensure the image tensor requires gradients
+        img_tensor.requires_grad_(True)
+        
+        # Compute the per-sample gradient of the softmax probability for the given label
+        grad_tensor = compute_per_sample_gradient(model, img_tensor, label_idx)  # shape: (1, 3, 224, 224)
+        
+        # Compute saliency map: take the max absolute gradient across channels, resulting in (1, 224, 224)
+        sal_map = torch.max(torch.abs(grad_tensor), dim=1)[0]  
+        saliency_maps[label] = sal_map.squeeze().detach().cpu().numpy()
+    
+    # Plot the original image and saliency maps side-by-side
+    num_plots = len(saliency_maps) + 1
+    fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
+    axes[0].imshow(img)
+    axes[0].set_title("Original Image")
+    axes[0].axis("off")
+    i = 1
+    for label, sal_map in saliency_maps.items():
+        axes[i].imshow(sal_map, cmap='hot')
+        axes[i].set_title(f"Saliency: {label}")
+        axes[i].axis("off")
+        i += 1
+    plt.tight_layout()
+    plt.show()
 
 # =============================================================================
 # Main Block
 # =============================================================================
 def main():
     # --- Load Data ---
-    # Here, we load validation data using your helper function.
-    # (Assumes get_valid_data returns (text_dir, labels, X_valid, Y_valid))
     text_dir, labels, X_valid, Y_valid = get_valid_data()
-    # Convert validation images from (N, 224, 224, 3) to (N, 3, 224, 224) and normalize pixel values to [0,1].
+
     X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
     Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
     valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
@@ -105,29 +177,31 @@ def main():
     
     # --- Load Model Checkpoint ---
     epoch = 0 
-    PATH = f"checkpoints/checkpoint_{epoch}epoch.pth"
+    PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
     print(f"Checkpoint saved to {PATH}")
     checkpoint = torch.load(PATH, map_location=device)
     
     num_classes = len(labels)
     model = AnimalClassifier(num_classes=num_classes)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
     model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    epoch_loss = checkpoint['epoch_loss']
-    val_loss = checkpoint['val_loss']
-    epoch_acc = checkpoint['epoch_acc']
-    val_acc = checkpoint['val_acc']
     model.to(device)
     model.eval()
     print("Animal model loaded and set to evaluation mode.")
-    print("Attributes:", f"epoch: {epoch}, epoch_loss: {epoch_loss}, val_loss: {val_loss}, epoch_acc: {epoch_acc}, val_acc: {val_acc}")
+    print("Attributes:", f"epoch: {checkpoint['epoch']}, epoch_loss: {checkpoint['epoch_loss']}, val_loss: {checkpoint['val_loss']}, epoch_acc: {checkpoint['epoch_acc']}, val_acc: {checkpoint['val_acc']}")
     
+    #optimizer = optim.Adam(model.parameters(), lr=0.001)
+    #optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
     # --- Initialize Regularization Parameters ---
     reg_params = RegParameters()
     reg_params.estimation = 'var'  # Use variance-based estimation
     print("Regularization parameters initialized. Using variance-based estimation.")
+    
+    # Example usage:
+    IMAGE_PATH = "images2explain/Giraffe_Lion.png"
+    generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
+
+    stop
     
     # --- Regularization Term Computation ---
     # We'll compute importance for each pixel subset for both ground-truth and predicted labels.

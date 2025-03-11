@@ -4,6 +4,7 @@ An implementation of the paper: "Removing Bias in Multi-modal Classifiers: Regul
 """
 
 import torch
+from typing import List  
 
 
 class Perturbation:
@@ -41,7 +42,7 @@ class Perturbation:
         return pertubated_tens  
 
     @classmethod
-    def _add_noise_to_tensor_subset(cls, tens: torch.Tensor, pixels: list[int] , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
+    def _add_noise_to_tensor_subset(cls, tens: torch.Tensor, pixels : List[int] , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
         """
         Adds noise to a tensor sampled from N(0, tens.std()).
         :param tens:
@@ -136,7 +137,7 @@ class Perturbation:
         return tens    
 
     @classmethod
-    def perturb_tensor_subset(cls, tens: torch.Tensor, pixels: list[int], n_samples: int, perturbation: bool = True) -> torch.Tensor:
+    def perturb_tensor_subset(cls, tens: torch.Tensor, pixels: List[int], n_samples: int, perturbation: bool = True) -> torch.Tensor:
         """
         Flatting the tensor, expanding it, perturbing exept from pixel and reconstructing to the original shape.
         Note, this function assumes that the batch is the first dimension.

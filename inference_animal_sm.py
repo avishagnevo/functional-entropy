@@ -10,7 +10,7 @@ from models import AnimalClassifier
 import torch.optim as optim
 from data import get_train_data, get_valid_data
 import torch.nn.functional as F
-from functorch import vmap, grad
+#from functorch import vmap, grad
 
 
 # --- Load data-loading blocks ---
@@ -28,7 +28,7 @@ valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
 
 # --- Load your Animal model from saved weights ---
 epoch = 0 
-PATH = f"checkpoints/checkpoint_{epoch}epoch.pth"
+PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
 print(f"Checkpoint saved to {PATH}")
 
 # --- Loading Checkpoint ---
@@ -70,10 +70,12 @@ print("Regularization parameters initialized. Using variance-based estimation.")
 
 # --- Regularization Term Computation Loop ---
 images_pixels_importance = []
-images_subsets_importance[batch_idx]['ground_truth'] = 0
-images_subsets_importance[batch_idx]['predicted'] = 0
+images_subsets_importance = {}
 
 for batch_idx, (images, batch_labels) in enumerate(valid_loader):
+    images_subsets_importance[batch_idx] = {}
+    images_subsets_importance[batch_idx]['ground_truth'] = 0
+    images_subsets_importance[batch_idx]['predicted'] = 0
     print(f"Processing batch {batch_idx+1}/{len(valid_loader)}...")
     #pixels_importance = []
     
@@ -97,7 +99,7 @@ for batch_idx, (images, batch_labels) in enumerate(valid_loader):
     #expanded_logits = Perturbation.get_expanded_logits(logits, reg_params.n_samples)
     #print(f"Expanded logits shape: {expanded_logits.shape}")  # Expected: (batch * n_samples, num_classes)
     
-    pixels_subsets = [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9]]
+    pixels_subsets = [[0]]
     subsets_importance = {}
     images_subsets_importance = {}
 

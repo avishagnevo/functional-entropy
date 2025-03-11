@@ -39,3 +39,7 @@ terraform.rc
 # Ignore data directory
 animals-detection-images-dataset/*
 checkpoints/*
+output1-40.txt  
+folder/giraffe_zebra.jpeg
+images/loss_accuracy1-40.png
+images/loss_accuracy1-40_2.png

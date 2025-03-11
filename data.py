@@ -192,3 +192,64 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         config = json.load(f)
     return config
+
+
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
+import torch
+
+class AnimalDataset(Dataset):
+    def __init__(self, images: np.ndarray, labels: np.ndarray, transform: transforms.Compose = None):
+        """
+        Custom dataset for animal images.
+        
+        :param images: NumPy array of images with shape (N, H, W, C)
+        :param labels: NumPy array of labels
+        :param transform: torchvision transforms to apply to each image
+        """
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.images)
+
+    def __getitem__(self, idx: int):
+        # Convert the NumPy image to a PIL Image
+        img = Image.fromarray(self.images[idx].astype('uint8'))
+        label = int(self.labels[idx])
+        if self.transform:
+            img = self.transform(img)
+        else:
+            # Default conversion: ToTensor scales pixel values to [0, 1]
+            img = transforms.ToTensor()(img)
+        return img, label
+
+
+def get_animal_dataloaders(X, Y, X_valid, Y_valid):
+    # Define training transforms including augmentation
+    train_transforms = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225])
+    ])
+
+    # Define validation transforms (only resize and normalization)
+    valid_transforms = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                            std=[0.229, 0.224, 0.225])
+    ])
+
+    # Suppose you already loaded your NumPy arrays for training and validation: X_train, Y_train, X_valid, Y_valid
+    train_dataset = AnimalDataset(X, Y, transform=train_transforms)
+    valid_dataset = AnimalDataset(X_valid, Y_valid, transform=valid_transforms)
+
+    batch_size = 32
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
