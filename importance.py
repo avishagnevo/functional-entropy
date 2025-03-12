@@ -268,12 +268,19 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
 def main():
     # --- Load Data ---
     #text_dir, labels, X_valid, Y_valid = get_valid_data()
+    #text_dir, labels, X_valid, Y_valid = get_valid_data()
 
     #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
     #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
     #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
     #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
+    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
+    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
+    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
     
+    config = load_config('config.json')
+    labels = config.get('labels', [])
     config = load_config('config.json')
     labels = config.get('labels', [])
     # --- Load Model Checkpoint ---
@@ -300,6 +307,8 @@ def main():
     
     # Example usage:
     IMAGE_PATH = "images2explain/Giraffe_Lion.png"
+    generate_information_map(IMAGE_PATH, model, labels, reg_params)
+    #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
     generate_information_map(IMAGE_PATH, model, labels, reg_params)
     #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
