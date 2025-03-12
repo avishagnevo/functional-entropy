@@ -83,7 +83,8 @@ class Perturbation:
         """
         tens_dim = list(tens.shape)
 
-        tens = tens.view(tens.shape[0], -1)
+        #tens = tens.view(tens.shape[0], -1)
+        tens = tens.reshape(tens.shape[0], -1)
         tens = tens.repeat(1, n_samples)
 
         tens = tens.view(tens.shape[0] * n_samples, -1)
@@ -147,11 +148,12 @@ class Perturbation:
         :param perturbation: False - only duplicating the tensor
         :return: tensor in the shape of [batch, samples * num_eval_samples]
         """
-        ''''''
+        '''
         tens = torch.zeros_like(tens.clone())
         pixel=pixels[0]
         ones = torch.ones_like(tens[:,:,pixel,pixel].clone())
         tens[:,:,pixel,pixel] = ones
+        print('tens.shape', tens.shape)'''
         
         tens_dim = list(tens.shape)
         max_pixel = tens_dim[-2]*tens_dim[-1]
@@ -159,8 +161,11 @@ class Perturbation:
 
         for pixel in pixels:
             assert pixel < max_pixel, f"Pixel index {pixel} is out of range 0:{max_pixel}"
+            
+        print('tens.shape', tens.shape)    
 
-        tens = tens.view(tens.shape[0], -1)
+        #tens = tens.view(tens.shape[0], -1)
+        tens = tens.reshape(tens.shape[0], -1)
         tens = tens.repeat(1, n_samples)
 
         tens = tens.view(tens.shape[0] * n_samples, -1)
