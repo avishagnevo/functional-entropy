@@ -190,15 +190,12 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
     """
     _, C, H, W = image.shape
     num_pixels = H * W
-    print('C,H,W', C, H, W)
-    print('H*W', H*W)
     saliency_map = torch.zeros((H * W,), device=image.device)
     for idx in range(num_pixels):
         imp = compute_subset_importance(model, image, [idx], label_idx, reg_params)
         saliency_map[idx] = imp
-        print('here', idx)
-        if idx == 20:
-            break
+        if idx % 100 == 0:
+            print(f"Processed {idx} pixels.")
     return saliency_map.view(H, W)
 
 def generate_information_map(image_path: str, model: nn.Module, labels: list, 
@@ -236,6 +233,7 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     
     info_maps = {}
     for label in gt_labels:
+        print(f"Computing information map for label: {label}")
         try:
             label_idx = labels.index(label)
         except ValueError:

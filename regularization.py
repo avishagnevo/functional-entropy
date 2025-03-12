@@ -162,7 +162,7 @@ class Perturbation:
         for pixel in pixels:
             assert pixel < max_pixel, f"Pixel index {pixel} is out of range 0:{max_pixel}"
             
-        print('tens.shape', tens.shape)    
+        #print('tens.shape', tens.shape)    
 
         #tens = tens.view(tens.shape[0], -1)
         tens = tens.reshape(tens.shape[0], -1)
