@@ -3,7 +3,7 @@ import zipfile
 import os
 import cv2 as cv
 import numpy as np
-import pytorch_lightning as pl
+#import pytorch_lightning as pl
 import requests
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
@@ -13,7 +13,7 @@ import json
 
 
 
-class CIFAR10Data(pl.LightningDataModule):
+class CIFAR10Data():#(pl.LightningDataModule):
     def __init__(self, args):
         super().__init__()
         self.hparams = args

@@ -160,7 +160,8 @@ class Perturbation:
         for pixel in pixels:
             assert pixel < max_pixel, f"Pixel index {pixel} is out of range 0:{max_pixel}"
 
-        tens = tens.view(tens.shape[0], -1)
+        #tens = tens.view(tens.shape[0], -1)
+        tens = tens.reshape(tens.shape[0], -1)
         tens = tens.repeat(1, n_samples)
 
         tens = tens.view(tens.shape[0] * n_samples, -1)

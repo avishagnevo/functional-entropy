@@ -10,6 +10,10 @@ from regularization import Perturbation, Regularization, RegParameters
 from models import AnimalClassifier
 from data import get_train_data, get_valid_data
 from typing import List  
+import json
+import matplotlib.pyplot as plt
+import functorch
+
 #from functorch import vmap, grad
 
 # Automatically set the device (GPU if available, else CPU)
@@ -34,8 +38,12 @@ def compute_per_sample_gradient(model: nn.Module, images: torch.Tensor, label_id
         return out_sm[0, label_idx]                # return the probability for the specified label
 
     # Compute the gradient function and apply it to each image in the batch via vmap
-    grad_f = torch.func.grad(f)
-    per_sample_grad = torch.vmap(grad_f)(images)  # shape: (B, C, H, W)
+    if not torch.cuda.is_available():
+        grad_f = torch.func.grad(f)
+        per_sample_grad = torch.vmap(grad_f)(images)  # shape: (B, C, H, W)
+    else:
+        grad_f = functorch.grad(f)
+        per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)    
     return per_sample_grad
 
 
@@ -48,30 +56,6 @@ def compute_importance(gradients: torch.Tensor, estimation: str = 'var') -> floa
     :return: A scalar importance measure.
     """
     importance = Regularization.get_batch_norm(gradients, estimation=estimation)
-    return importance
-
-
-def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: List[int], 
-                              label_idx: int, reg_params: RegParameters) -> float:
-    """
-    Computes the importance measure for a subset of pixels for a given label by perturbing the images on that subset,
-    computing the softmax probability, and then calculating the gradient with respect to the inputs.
-    
-    :param model: The neural network model.
-    :param images: A batch of images of shape (B, C, H, W).
-    :param pixels: List of pixel indices to include in the perturbation.
-    :param label_idx: The index of the label for which to compute the gradient.
-    :param reg_params: Regularization parameters (e.g., number of samples).
-    :return: A scalar importance measure for the pixel subset.
-    """
-    # Perturb the images on the specified pixel subset
-    inf_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    # Ensure perturbed images require gradients
-    inf_images.requires_grad_(True)
-    # Compute per-sample gradients of the softmax probability (for label label_idx) w.r.t. perturbed images
-    per_sample_grad = compute_per_sample_gradient(model, inf_images, label_idx)
-    # Compute an importance measure from these gradients
-    importance = compute_importance(per_sample_grad, estimation=reg_params.estimation)
     return importance
 
 def aggregate_importance_scores(subsets_importance: dict) -> dict:
@@ -88,11 +72,6 @@ def aggregate_importance_scores(subsets_importance: dict) -> dict:
     predicted_total = sum(score_dict['predicted'] for score_dict in subsets_importance.values())
     return {'ground_truth_total': ground_truth_total, 'predicted_total': predicted_total}
 
-import os
-import cv2 as cv
-import torch
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
 
 def generate_saliency_map(image_path: str, model: torch.nn.Module, labels: list, reg_params: RegParameters) -> None:
     """
@@ -162,19 +141,141 @@ def generate_saliency_map(image_path: str, model: torch.nn.Module, labels: list,
         i += 1
     plt.tight_layout()
     plt.show()
+    
+
+
+def load_config(config_path: str) -> dict:
+    """
+    Loads the configuration from a JSON file.
+    
+    :param config_path: Path to the JSON config file.
+    :return: A dictionary with configuration parameters.
+    """
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+
+def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: list[int], 
+                              label_idx: int, reg_params: RegParameters) -> float:
+    """
+    Computes the importance measure for a subset of pixels for a given label by perturbing the images
+    on that subset, computing the softmax probability, and then calculating the gradient with respect
+    to the inputs.
+    
+    :param model: The neural network model.
+    :param images: A batch of images of shape (B, C, H, W).
+    :param pixels: List of pixel indices (flattened) to include in the perturbation.
+    :param label_idx: The index of the label for which to compute the gradient.
+    :param reg_params: Regularization parameters.
+    :return: A scalar importance measure for the pixel subset.
+    """
+    inf_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
+    inf_images.requires_grad_(True)
+    per_sample_grad = compute_per_sample_gradient(model, inf_images, label_idx)
+    importance = compute_importance(per_sample_grad, estimation=reg_params.estimation)
+    return importance
+
+def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_idx: int, 
+                                   reg_params: RegParameters) -> torch.Tensor:
+    """
+    Computes an information map for a single image for a specific label using the developed method.
+    For each pixel in the image, computes the importance measure via perturbations.
+    
+    :param model: The neural network model.
+    :param image: A single image tensor of shape (1, 3, H, W) with requires_grad=True.
+    :param label_idx: The index of the label for which to compute the importance.
+    :param reg_params: Regularization parameters.
+    :return: A tensor of shape (H, W) with the importance score for each pixel.
+    """
+    _, C, H, W = image.shape
+    num_pixels = H * W
+    print('C,H,W', C, H, W)
+    print('H*W', H*W)
+    saliency_map = torch.zeros((H * W,), device=image.device)
+    for idx in range(num_pixels):
+        imp = compute_subset_importance(model, image, [idx], label_idx, reg_params)
+        saliency_map[idx] = imp
+        print('here', idx)
+        if idx == 20:
+            break
+    return saliency_map.view(H, W)
+
+def generate_information_map(image_path: str, model: nn.Module, labels: list, 
+                             reg_params: RegParameters) -> None:
+    """
+    Loads an image from IMAGE_PATH, extracts the two ground truth labels from its filename (expected format: 
+    "Label1_Label2.png"), computes a pixel-level information map for each label using the developed method, and 
+    displays the original image alongside the maps.
+    
+    :param image_path: Path to the image file.
+    :param model: The classification model.
+    :param labels: List of valid labels. The image filename should contain two labels separated by an underscore.
+    :param reg_params: Regularization parameters.
+    :return: None. Displays the original image and its information maps.
+    """
+    # Load and preprocess the image
+    img = cv.imread(image_path)
+    if img is None:
+        print(f"Error loading image from {image_path}")
+        return
+    img = cv.cvtColor(img, cv.COLOR_BGR2RGB)
+    img = cv.resize(img, (224, 224))
+    
+    # Convert to tensor: shape (1, 3, 224, 224)
+    img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+    img_tensor.requires_grad_(True)
+    
+    # Extract ground truth labels from filename
+    base_name = os.path.basename(image_path)
+    name_no_ext, _ = os.path.splitext(base_name)
+    gt_labels = name_no_ext.split('_')
+    if len(gt_labels) < 2:
+        print("Warning: Expected at least 2 labels in filename (e.g., Giraffe_Lion.png)")
+    
+    info_maps = {}
+    for label in gt_labels:
+        try:
+            label_idx = labels.index(label)
+        except ValueError:
+            print(f"Label '{label}' not found in the provided labels list.")
+            continue
+        sal_map = compute_pixel_level_importance(model, img_tensor, label_idx, reg_params)
+        info_maps[label] = sal_map.detach().cpu().numpy()
+    
+    # Display the original image and information maps
+    num_plots = len(info_maps) + 1
+    fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
+    axes[0].imshow(img)
+    axes[0].set_title("Original Image")
+    axes[0].axis("off")
+    for i, (label, info_map) in enumerate(info_maps.items(), start=1):
+        axes[i].imshow(info_map, cmap='hot')
+        axes[i].set_title(f"Info Map: {label}")
+        axes[i].axis("off")
+    plt.tight_layout()
+    plt.show()
+    
+    info_map_path = "info_map.png"
+    fig.savefig(info_map_path)
+    print(f"Information map saved to {info_map_path}")
+
 
 # =============================================================================
 # Main Block
 # =============================================================================
 def main():
     # --- Load Data ---
-    text_dir, labels, X_valid, Y_valid = get_valid_data()
+    #text_dir, labels, X_valid, Y_valid = get_valid_data()
 
-    X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-    Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
-    valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
-    valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
+    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
+    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
+    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
     
+    config = load_config('config.json')
+    labels = config.get('labels', [])
     # --- Load Model Checkpoint ---
     epoch = 0 
     PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
@@ -199,7 +300,8 @@ def main():
     
     # Example usage:
     IMAGE_PATH = "images2explain/Giraffe_Lion.png"
-    generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
+    generate_information_map(IMAGE_PATH, model, labels, reg_params)
+    #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
     stop
     
