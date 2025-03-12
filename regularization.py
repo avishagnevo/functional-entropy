@@ -33,7 +33,7 @@ class Perturbation:
         :param over_dim: over what dim to calculate the std. 0 for features over batch,  1 for over sample.
         :return: noisy tensor in the same shape as input
         """
-        pertubated_tens = tens.clone() + torch.randn_like(tens) * torch.ones_like(tens.std(dim=over_dim))
+        pertubated_tens = tens.add_(torch.randn_like(tens) * torch.ones_like(tens.std(dim=over_dim)))
         jump = tens.shape[-1]//num_channels
 
         for channel in range(num_channels):
@@ -165,7 +165,8 @@ class Perturbation:
         #print('tens.shape', tens.shape)    
 
         #tens = tens.view(tens.shape[0], -1)
-        tens = tens.reshape(tens.shape[0], -1)
+        #tens = tens.reshape(tens.shape[0], -1)
+        tens = tens.contiguous().view(tens.shape[0], -1)
         tens = tens.repeat(1, n_samples)
 
         tens = tens.view(tens.shape[0] * n_samples, -1)

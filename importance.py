@@ -13,6 +13,9 @@ from typing import List
 import json
 import matplotlib.pyplot as plt
 import functorch
+import psutil
+import gc
+
 
 #from functorch import vmap, grad
 
@@ -56,6 +59,11 @@ def compute_importance(gradients: torch.Tensor, estimation: str = 'var') -> floa
     :return: A scalar importance measure.
     """
     importance = Regularization.get_batch_norm(gradients, estimation=estimation)
+    importance = importance.detach().clone()  # Ensure no graph connection
+
+    del gradients
+    torch.cuda.empty_cache()
+    gc.collect()
     return importance
 
 def aggregate_importance_scores(subsets_importance: dict) -> dict:
@@ -171,10 +179,23 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :return: A scalar importance measure for the pixel subset.
     """
     inf_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    inf_images.requires_grad_(True)
     per_sample_grad = compute_per_sample_gradient(model, inf_images, label_idx)
+    inf_images.requires_grad_(True)
     importance = compute_importance(per_sample_grad, estimation=reg_params.estimation)
+    
+    inf_images = inf_images.detach().clone()  # Detach and clone to avoid backpropagation
+    per_sample_grad = per_sample_grad.detach().clone()
+    
+    del inf_images, per_sample_grad  # Delete the intermediate tensors to free up memory
+    torch.cuda.empty_cache()  # Clear GPU memory
+    gc.collect()  # Run garbage collection
+    
     return importance
+
+def print_memory_usage():
+    process = psutil.Process(os.getpid())
+    print(f"Memory Usage: {process.memory_info().rss / 1e6} MB")  # Convert to MB
+    torch.cuda.empty_cache()
 
 def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_idx: int, 
                                    reg_params: RegParameters) -> torch.Tensor:
@@ -190,11 +211,18 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
     """
     _, C, H, W = image.shape
     num_pixels = H * W
-    saliency_map = torch.zeros((H * W,), device=image.device)
+    saliency_map = torch.zeros((num_pixels,), device=image.device)
     for idx in range(num_pixels):
         imp = compute_subset_importance(model, image, [idx], label_idx, reg_params)
         saliency_map[idx] = imp
-        if idx % 100 == 0:
+        # Call this function after processing each pixel
+        print_memory_usage()
+        
+        del imp  # Delete the importance tensor to free up memory
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        if idx % 100 == 0 and idx > 0:
             print(f"Processed {idx} pixels.")
     return saliency_map.view(H, W)
 
@@ -241,6 +269,10 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
             continue
         sal_map = compute_pixel_level_importance(model, img_tensor, label_idx, reg_params)
         info_maps[label] = sal_map.detach().cpu().numpy()
+        
+        del sal_map
+        torch.cuda.empty_cache()
+        gc.collect()
     
     # Display the original image and information maps
     num_plots = len(info_maps) + 1
@@ -258,6 +290,10 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     info_map_path = "info_map.png"
     fig.savefig(info_map_path)
     print(f"Information map saved to {info_map_path}")
+    
+    del info_maps, img_tensor
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
 # =============================================================================
@@ -305,8 +341,6 @@ def main():
     
     # Example usage:
     IMAGE_PATH = "images2explain/Giraffe_Lion.png"
-    generate_information_map(IMAGE_PATH, model, labels, reg_params)
-    #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
     generate_information_map(IMAGE_PATH, model, labels, reg_params)
     #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
