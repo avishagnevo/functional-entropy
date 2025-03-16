@@ -212,18 +212,20 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
     _, C, H, W = image.shape
     num_pixels = H * W
     saliency_map = torch.zeros((num_pixels,), device=image.device)
-    for idx in range(num_pixels):
-        imp = compute_subset_importance(model, image, [idx], label_idx, reg_params)
-        saliency_map[idx] = imp
-        # Call this function after processing each pixel
-        print_memory_usage()
+    with open('pixel_importance.txt', 'w') as f:
+        for idx in range(num_pixels):
+            imp = compute_subset_importance(model, image, [idx], label_idx, reg_params)
+            saliency_map[idx] = imp
+            f.write(f'idx: {idx}, pixel importance: {imp}\n')
+            
+            del imp  # Delete the importance tensor to free up memory
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            if idx % 100 == 0 and idx > 0:
+                print(f"Processed {idx} pixels.")
+                print_memory_usage()
         
-        del imp  # Delete the importance tensor to free up memory
-        torch.cuda.empty_cache()
-        gc.collect()
-        
-        if idx % 100 == 0 and idx > 0:
-            print(f"Processed {idx} pixels.")
     return saliency_map.view(H, W)
 
 def generate_information_map(image_path: str, model: nn.Module, labels: list, 
