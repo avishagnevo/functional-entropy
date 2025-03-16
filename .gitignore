@@ -41,3 +41,4 @@ animals-detection-images-dataset/*
 checkpoints/*
 old_files/*
 images/*
+cifar10_models/*

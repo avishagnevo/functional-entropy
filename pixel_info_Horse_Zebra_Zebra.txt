@@ -1,0 +1,4 @@
+idx: 0, pixel importance: 0.5081498622894287
+idx: 1, pixel importance: 0.5130054950714111
+idx: 2, pixel importance: 0.5511062145233154
+idx: 3, pixel importance: 0.4946995973587036

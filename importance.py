@@ -15,7 +15,9 @@ import matplotlib.pyplot as plt
 import functorch
 import psutil
 import gc
-
+import time
+import torch
+import torch.nn.functional as F
 
 #from functorch import vmap, grad
 
@@ -25,29 +27,151 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # =============================================================================
 # Utility Functions
 # =============================================================================
-def compute_per_sample_gradient(model: nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
+# approx_importance.py
+
+import torch
+import torch.nn.functional as F
+import functorch
+from importance import *  # import existing functions if needed
+
+def compute_per_sample_gradient_approx(model: torch.nn.Module, original_image: torch.Tensor, 
+                                       perturbed_images: torch.Tensor, label_idx: int) -> torch.Tensor:
+    """
+    Approximates the gradient of the softmax probability for a specified label with respect to each 
+    perturbed image, using a first-order Taylor expansion. The perturbed images are assumed to be of the form:
+        x_perturbed = original_image + δ
+    where δ is small and nonzero only at the targeted pixel(s).
+    
+    The approximation is:
+        grad f(x + δ) ≈ grad f(x) + H(x)·δ
+    where H(x)·δ is computed efficiently using functorch.jvp.
+
+    :param model: The neural network model.
+    :param original_image: The unperturbed image tensor of shape (C, H, W) with requires_grad=True.
+    :param perturbed_images: A batch of perturbed images of shape (B, C, H, W). These should be produced 
+                             by adding small noise only at the pixels of interest.
+    :param label_idx: The index of the label for which to compute the gradient.
+    :return: A tensor of shape (B, C, H, W) with the approximated gradient for each perturbed image.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()  # ensure all GPU work is done before timing
+    
+    start = time.perf_counter()
+    # Define f on a single image: returns the softmax probability for the given label.
+    def f(x: torch.Tensor) -> torch.Tensor:
+        out = model(x.unsqueeze(0))              # shape: (1, num_classes)
+        out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
+        return out_sm[0, label_idx]                # scalar
+
+    # Compute the gradient at the original image (g_orig).
+    grad_f = functorch.grad(f)
+    g_orig = grad_f(original_image)  # shape: (C, H, W)
+
+    # For each perturbed image, compute δ = (x_perturbed - original_image).
+    # original_image has shape (C, H, W); we unsqueeze to (1, C, H, W) to broadcast.
+    delta = perturbed_images - original_image.unsqueeze(0)  # shape: (B, C, H, W)
+
+    # Define a helper that computes the Hessian-vector product (H(x)·δ) for a single δ.
+    def hvp(delta_single: torch.Tensor) -> torch.Tensor:
+        # functorch.jvp computes (f(x), directional derivative of f at x in direction δ)
+        # Here we compute it for grad_f, so that the directional derivative equals H(x)·δ.
+        _, jvp_val = functorch.jvp(grad_f, (original_image,), (delta_single,))
+        return jvp_val  # shape: (C, H, W)
+    
+    # Vectorize the hvp function over the batch dimension.
+    vectorized_hvp = functorch.vmap(hvp)
+
+    end = time.perf_counter()
+    print(f"1st Computation took {end - start:.4f} seconds")
+    
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()  # ensure all GPU work is done before timing
+    
+    start = time.perf_counter()
+
+
+    # Vectorize hvp over the batch dimension.
+    approx_hvp = vectorized_hvp(delta)  # shape: (B, C, H, W)
+
+    # The approximated gradient for each perturbed image:
+    approx_grad = g_orig.unsqueeze(0) + approx_hvp  # shape: (B, C, H, W)
+    
+    end = time.perf_counter()
+    print(f"2nd Computation took {end - start:.4f} seconds")
+    
+    return approx_grad
+
+# You might then override your original compute_per_sample_gradient with the approximate version.
+# For example, if you want to switch based on a flag, you could do:
+
+def _compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int, 
+                                approx: bool = True) -> torch.Tensor:
     """
     Computes the gradient of the softmax probability for a specified label with respect to each input image.
+    
+    If approx==True, it uses a first-order Taylor expansion to approximate the gradient for each perturbed image
+    by reusing the gradient computed at the original image.
+    
+    :param model: The neural network model.
+    :param images: A batch of perturbed images of shape (B, C, H, W). Must have requires_grad=True.
+    :param label_idx: The index of the label for which to compute the gradient.
+    :param approx: Whether to use the approximation.
+    :return: A tensor of shape (B, C, H, W) with the gradient for each image.
+    """
+    # If no approximation, fall back on the original method.
+    if not approx:
+        if not torch.cuda.is_available():
+            grad_f = torch.func.grad(lambda x: F.softmax(model(x.unsqueeze(0)), dim=1)[0, label_idx])
+            return torch.vmap(grad_f)(images)
+        else:
+            grad_f = functorch.grad(lambda x: F.softmax(model(x.unsqueeze(0)), dim=1)[0, label_idx])
+            return functorch.vmap(grad_f)(images)
+    
+    # Otherwise, assume that all perturbed images in 'images' were generated from the same original image.
+    # Here, we extract the original image from the first sample.
+    original_image = images[0].detach()
+    # Compute approximate gradients.
+    per_sample_grad = compute_per_sample_gradient_approx(model, original_image, images, label_idx)
+    
+    return per_sample_grad
+
+
+def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
+    """
+    Computes the gradient of the softmax probability for a specified label with respect 
+    to each input image and prints the computation time.
     
     :param model: The neural network model.
     :param images: A batch of images of shape (B, C, H, W). Must have requires_grad=True.
     :param label_idx: The index of the label for which to compute the gradient.
     :return: A tensor of shape (B, C, H, W) with the gradient for each image.
     """
+    #if torch.cuda.is_available():
+    #    torch.cuda.synchronize()  # ensure all GPU work is done before timing
+    
+    #start = time.perf_counter()
+
     def f(x: torch.Tensor) -> torch.Tensor:
         # x has shape (C, H, W); add batch dimension
         out = model(x.unsqueeze(0))              # shape: (1, num_classes)
         out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
         return out_sm[0, label_idx]                # return the probability for the specified label
 
-    # Compute the gradient function and apply it to each image in the batch via vmap
     if not torch.cuda.is_available():
         grad_f = torch.func.grad(f)
         per_sample_grad = torch.vmap(grad_f)(images)  # shape: (B, C, H, W)
     else:
         grad_f = functorch.grad(f)
-        per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)    
+        per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)
+    
+    #if torch.cuda.is_available():
+    #    torch.cuda.synchronize()  # wait for GPU work to finish
+    
+    #end = time.perf_counter()
+    #print(f"Batch size {images.shape[0]}: Computation took {end - start:.4f} seconds")
+    
     return per_sample_grad
+
 
 
 def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str = 'var') -> float:
@@ -58,15 +182,9 @@ def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str =
     :param estimation: Estimation method to use ('var' or 'ent').
     :return: A scalar importance measure.
     """
-    #importance = Regularization.get_batch_norm(gradients, estimation=estimation)
     importance = Regularization.get_grad_sqrd_norm_mean(gradients, n_samples, estimation)
-    print(f"Importance shape: {importance.shape}")
     importance = importance.detach().clone()  # Ensure no graph connection
-
-    #del gradients
-    #torch.cuda.empty_cache()
-    #gc.collect()
-    #print_memory_usage()
+    
     return importance
 
 def aggregate_importance_scores(subsets_importance: dict) -> dict:
@@ -181,11 +299,11 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :param reg_params: Regularization parameters.
     :return: A scalar importance measure for the pixel subset.
     """
-    print('images shape:', images.shape)
+    #print('images shape:', images.shape)
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    print(f"Perturbed images shape: {pertub_images.shape}")
+    #print(f"Perturbed images shape: {pertub_images.shape}")
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
-    print(f"Per-sample gradient shape: {per_sample_grad.shape}")
+    #print(f"Per-sample gradient shape: {per_sample_grad.shape}")
     pertub_images.requires_grad_(True)
     importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
         
@@ -237,51 +355,55 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
 
 
 def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, label_idx: int, 
-                                           reg_params: RegParameters,save_path: str = 'pixel_info.txt', batch_size: int = 16) -> torch.Tensor:
+                                           reg_params: RegParameters, save_path: str = 'pixel_info.txt', batch_size: int = 4) -> torch.Tensor:
     """
     Computes an information map for a single image for a specific label using batched perturbations.
+    
+    Processes pixels in batches and appends the computed importance values to the file at save_path.
     
     :param model: The neural network model.
     :param image: A single image tensor of shape (1, 3, H, W) with requires_grad=True.
     :param label_idx: The index of the label for which to compute the importance.
     :param reg_params: Regularization parameters.
+    :param save_path: File path to which pixel importance results will be appended.
     :param batch_size: Number of pixels to process in one batch.
     :return: A tensor of shape (H, W) with the importance score for each pixel.
     """
+    import gc
+    # image shape: (1, 3, H, W)
     _, C, H, W = image.shape
     num_pixels = H * W
     saliency_map = torch.zeros((num_pixels,), device=image.device)
     
-    pixel_importance_lines = []
+    if os.path.exists(save_path):
+        os.remove(save_path)
     
+    # Process the pixels in batches.
     for batch_start in range(0, num_pixels, batch_size):
         batch_indices = list(range(batch_start, min(batch_start + batch_size, num_pixels)))
-        #print(f"Processing batch: {batch_indices}")
-
-        importance_batch = compute_subset_importance(model, image, batch_indices, label_idx, reg_params) # (batch_size,)
-        #print(f"Importance batch shape: {importance_batch.shape}")
-        #print(saliency_map[batch_start:batch_start + len(batch_indices)])
+        
+        # Compute the importance values for the current batch.
+        importance_batch = compute_subset_importance(model, image, batch_indices, label_idx, reg_params)  # expected shape: (batch_size,)
         saliency_map[batch_start:batch_start + len(batch_indices)] = importance_batch
         
+        # Create lines for this batch.
+        pixel_importance_lines = []
         for idx, imp in zip(batch_indices, importance_batch):
             pixel_importance_lines.append(f'idx: {idx}, pixel importance: {imp.item()}\n')
         
-        #print('*',batch_start + len(batch_indices))
-        if (batch_start + len(batch_indices)) % (1*batch_size) == 0:
+        # Append current batch's results to the file.
+        with open(save_path, 'a') as f:
+            f.writelines(pixel_importance_lines)
+        
+        # Optionally print progress and perform cleanup.
+        if (batch_start + len(batch_indices)) % (batch_size) == 0:
             print(f"Processed {batch_start + len(batch_indices)} / {num_pixels} pixels.")
             print_memory_usage()
-
             torch.cuda.empty_cache()
             gc.collect()
-
-            #return saliency_map.view(H, W)
-            break
-    
-    # Write all pixel importance lines to file at once.
-    with open(save_path, 'w') as f:
-        f.writelines(pixel_importance_lines)
     
     return saliency_map.view(H, W)
+
 
 
 
@@ -316,13 +438,12 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     name_no_ext, _ = os.path.splitext(base_name)
     gt_labels = name_no_ext.split('_')
     if len(gt_labels) < 2:
-        print("Warning: Expected at least 2 labels in filename (e.g., Giraffe_Lion.png)")
-
-    PIXEL_INFO_PATH = f"pixel_info_{name_no_ext}_"    
+        print("Warning: Expected at least 2 labels in filename (e.g., Giraffe_Lion.png)")   
     
     info_maps = {}
     for label in gt_labels:
         print(f"Computing information map for label: {label}")
+        PIXEL_INFO_PATH = f"pixel_info_{name_no_ext}_" 
         PIXEL_INFO_PATH = PIXEL_INFO_PATH + label + ".txt"   
     
         try:
@@ -392,7 +513,7 @@ def main():
     print("Regularization parameters initialized. Using variance-based estimation.")
     
     # Example usage:
-    IMAGE_PATH = "images2explain/Giraffe_Lion.png"
+    IMAGE_PATH = "images2explain/Horse_Zebra.png" #"images2explain/Giraffe_Lion.png"
     generate_information_map(IMAGE_PATH, model, labels, reg_params)
     #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
