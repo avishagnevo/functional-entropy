@@ -1,0 +1,16 @@
+idx: 0, pixel importance: 0.8905836343765259
+idx: 1, pixel importance: 1.0374521017074585
+idx: 2, pixel importance: 0.9680230617523193
+idx: 3, pixel importance: 0.8183702826499939
+idx: 4, pixel importance: 0.7638744115829468
+idx: 5, pixel importance: 0.6330875158309937
+idx: 6, pixel importance: 0.6306906938552856
+idx: 7, pixel importance: 0.5894728899002075
+idx: 8, pixel importance: 0.5077388286590576
+idx: 9, pixel importance: 0.29659730195999146
+idx: 10, pixel importance: 0.3998541235923767
+idx: 11, pixel importance: 0.607292115688324
+idx: 12, pixel importance: 0.5351550579071045
+idx: 13, pixel importance: 0.7856724262237549
+idx: 14, pixel importance: 0.4762645363807678
+idx: 15, pixel importance: 0.5830246806144714

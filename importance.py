@@ -50,7 +50,7 @@ def compute_per_sample_gradient(model: nn.Module, images: torch.Tensor, label_id
     return per_sample_grad
 
 
-def compute_importance(gradients: torch.Tensor, estimation: str = 'var') -> float:
+def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str = 'var') -> float:
     """
     Computes an importance measure from the gradients using the Regularization helper.
     
@@ -58,12 +58,15 @@ def compute_importance(gradients: torch.Tensor, estimation: str = 'var') -> floa
     :param estimation: Estimation method to use ('var' or 'ent').
     :return: A scalar importance measure.
     """
-    importance = Regularization.get_batch_norm(gradients, estimation=estimation)
+    #importance = Regularization.get_batch_norm(gradients, estimation=estimation)
+    importance = Regularization.get_grad_sqrd_norm_mean(gradients, n_samples, estimation)
+    print(f"Importance shape: {importance.shape}")
     importance = importance.detach().clone()  # Ensure no graph connection
 
-    del gradients
-    torch.cuda.empty_cache()
-    gc.collect()
+    #del gradients
+    #torch.cuda.empty_cache()
+    #gc.collect()
+    #print_memory_usage()
     return importance
 
 def aggregate_importance_scores(subsets_importance: dict) -> dict:
@@ -178,18 +181,22 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :param reg_params: Regularization parameters.
     :return: A scalar importance measure for the pixel subset.
     """
+    print('images shape:', images.shape)
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
+    print(f"Perturbed images shape: {pertub_images.shape}")
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
+    print(f"Per-sample gradient shape: {per_sample_grad.shape}")
     pertub_images.requires_grad_(True)
-    importance = compute_importance(per_sample_grad, estimation=reg_params.estimation)
-    
-    pertub_images = pertub_images.detach().clone()  # Detach and clone to avoid backpropagation
-    per_sample_grad = per_sample_grad.detach().clone()
-    
+    importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
+        
+    #print_memory_usage()
+    pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM
+    per_sample_grad = per_sample_grad.detach()#.clone()
+    #print_memory_usage()
+
     del pertub_images, per_sample_grad  # Delete the intermediate tensors to free up memory
-    torch.cuda.empty_cache()  # Clear GPU memory
-    gc.collect()  # Run garbage collection
-    
+    #torch.cuda.empty_cache()  # Clear GPU memory
+    #gc.collect()  # Run garbage collection
     return importance
 
 def print_memory_usage():
@@ -230,7 +237,7 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
 
 
 def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, label_idx: int, 
-                                           reg_params: RegParameters, batch_size: int = 256) -> torch.Tensor:
+                                           reg_params: RegParameters,save_path: str = 'pixel_info.txt', batch_size: int = 16) -> torch.Tensor:
     """
     Computes an information map for a single image for a specific label using batched perturbations.
     
@@ -249,26 +256,29 @@ def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, 
     
     for batch_start in range(0, num_pixels, batch_size):
         batch_indices = list(range(batch_start, min(batch_start + batch_size, num_pixels)))
+        #print(f"Processing batch: {batch_indices}")
 
         importance_batch = compute_subset_importance(model, image, batch_indices, label_idx, reg_params) # (batch_size,)
-        print(f"Importance batch shape: {importance_batch.shape}")
+        #print(f"Importance batch shape: {importance_batch.shape}")
+        #print(saliency_map[batch_start:batch_start + len(batch_indices)])
         saliency_map[batch_start:batch_start + len(batch_indices)] = importance_batch
         
         for idx, imp in zip(batch_indices, importance_batch):
             pixel_importance_lines.append(f'idx: {idx}, pixel importance: {imp.item()}\n')
         
-        if (batch_start + len(batch_indices)) % (1*batch_size + 1) == 0:
+        #print('*',batch_start + len(batch_indices))
+        if (batch_start + len(batch_indices)) % (1*batch_size) == 0:
             print(f"Processed {batch_start + len(batch_indices)} / {num_pixels} pixels.")
             print_memory_usage()
 
             torch.cuda.empty_cache()
             gc.collect()
 
-            return saliency_map.view(H, W)
-        break
+            #return saliency_map.view(H, W)
+            break
     
     # Write all pixel importance lines to file at once.
-    with open('pixel_importance.txt', 'w') as f:
+    with open(save_path, 'w') as f:
         f.writelines(pixel_importance_lines)
     
     return saliency_map.view(H, W)
@@ -307,17 +317,21 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     gt_labels = name_no_ext.split('_')
     if len(gt_labels) < 2:
         print("Warning: Expected at least 2 labels in filename (e.g., Giraffe_Lion.png)")
+
+    PIXEL_INFO_PATH = f"pixel_info_{name_no_ext}_"    
     
     info_maps = {}
     for label in gt_labels:
         print(f"Computing information map for label: {label}")
+        PIXEL_INFO_PATH = PIXEL_INFO_PATH + label + ".txt"   
+    
         try:
             label_idx = labels.index(label)
         except ValueError:
             print(f"Label '{label}' not found in the provided labels list.")
             continue
         if batch_flag:
-            sal_map = compute_pixel_level_importance_batch(model, img_tensor, label_idx, reg_params)
+            sal_map = compute_pixel_level_importance_batch(model, img_tensor, label_idx, reg_params, PIXEL_INFO_PATH)
         else:
             sal_map = compute_pixel_level_importance(model, img_tensor, label_idx, reg_params)
         info_maps[label] = sal_map.detach().cpu().numpy()
@@ -351,19 +365,6 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
 # Main Block
 # =============================================================================
 def main():
-    # --- Load Data ---
-    #text_dir, labels, X_valid, Y_valid = get_valid_data()
-    #text_dir, labels, X_valid, Y_valid = get_valid_data()
-
-    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
-    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
-    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
-    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
-    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
-    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
-    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
-    
     config = load_config('config.json')
     labels = config.get('labels', [])
     config = load_config('config.json')
@@ -396,6 +397,19 @@ def main():
     #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
     stop
+
+    # --- Load Data ---
+    #text_dir, labels, X_valid, Y_valid = get_valid_data()
+    #text_dir, labels, X_valid, Y_valid = get_valid_data()
+
+    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
+    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
+    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
+    #X_valid_tensor = torch.tensor(X_valid, dtype=torch.float32).permute(0, 3, 1, 2) / 255.0
+    #Y_valid_tensor = torch.tensor(Y_valid, dtype=torch.long)
+    #valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
+    #valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False)
     
     # --- Regularization Term Computation ---
     # We'll compute importance for each pixel subset for both ground-truth and predicted labels.
