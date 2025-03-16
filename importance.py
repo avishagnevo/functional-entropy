@@ -178,15 +178,15 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :param reg_params: Regularization parameters.
     :return: A scalar importance measure for the pixel subset.
     """
-    inf_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    per_sample_grad = compute_per_sample_gradient(model, inf_images, label_idx)
-    inf_images.requires_grad_(True)
+    pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
+    per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
+    pertub_images.requires_grad_(True)
     importance = compute_importance(per_sample_grad, estimation=reg_params.estimation)
     
-    inf_images = inf_images.detach().clone()  # Detach and clone to avoid backpropagation
+    pertub_images = pertub_images.detach().clone()  # Detach and clone to avoid backpropagation
     per_sample_grad = per_sample_grad.detach().clone()
     
-    del inf_images, per_sample_grad  # Delete the intermediate tensors to free up memory
+    del pertub_images, per_sample_grad  # Delete the intermediate tensors to free up memory
     torch.cuda.empty_cache()  # Clear GPU memory
     gc.collect()  # Run garbage collection
     
@@ -228,8 +228,55 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
         
     return saliency_map.view(H, W)
 
+
+def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, label_idx: int, 
+                                           reg_params: RegParameters, batch_size: int = 256) -> torch.Tensor:
+    """
+    Computes an information map for a single image for a specific label using batched perturbations.
+    
+    :param model: The neural network model.
+    :param image: A single image tensor of shape (1, 3, H, W) with requires_grad=True.
+    :param label_idx: The index of the label for which to compute the importance.
+    :param reg_params: Regularization parameters.
+    :param batch_size: Number of pixels to process in one batch.
+    :return: A tensor of shape (H, W) with the importance score for each pixel.
+    """
+    _, C, H, W = image.shape
+    num_pixels = H * W
+    saliency_map = torch.zeros((num_pixels,), device=image.device)
+    
+    pixel_importance_lines = []
+    
+    for batch_start in range(0, num_pixels, batch_size):
+        batch_indices = list(range(batch_start, min(batch_start + batch_size, num_pixels)))
+
+        importance_batch = compute_subset_importance(model, image, batch_indices, label_idx, reg_params) # (batch_size,)
+        print(f"Importance batch shape: {importance_batch.shape}")
+        saliency_map[batch_start:batch_start + len(batch_indices)] = importance_batch
+        
+        for idx, imp in zip(batch_indices, importance_batch):
+            pixel_importance_lines.append(f'idx: {idx}, pixel importance: {imp.item()}\n')
+        
+        if (batch_start + len(batch_indices)) % (1*batch_size + 1) == 0:
+            print(f"Processed {batch_start + len(batch_indices)} / {num_pixels} pixels.")
+            print_memory_usage()
+
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            return saliency_map.view(H, W)
+        break
+    
+    # Write all pixel importance lines to file at once.
+    with open('pixel_importance.txt', 'w') as f:
+        f.writelines(pixel_importance_lines)
+    
+    return saliency_map.view(H, W)
+
+
+
 def generate_information_map(image_path: str, model: nn.Module, labels: list, 
-                             reg_params: RegParameters) -> None:
+                             reg_params: RegParameters, batch_flag: bool=True) -> None:
     """
     Loads an image from IMAGE_PATH, extracts the two ground truth labels from its filename (expected format: 
     "Label1_Label2.png"), computes a pixel-level information map for each label using the developed method, and 
@@ -269,7 +316,10 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
         except ValueError:
             print(f"Label '{label}' not found in the provided labels list.")
             continue
-        sal_map = compute_pixel_level_importance(model, img_tensor, label_idx, reg_params)
+        if batch_flag:
+            sal_map = compute_pixel_level_importance_batch(model, img_tensor, label_idx, reg_params)
+        else:
+            sal_map = compute_pixel_level_importance(model, img_tensor, label_idx, reg_params)
         info_maps[label] = sal_map.detach().cpu().numpy()
         
         del sal_map
@@ -296,7 +346,6 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     del info_maps, img_tensor
     torch.cuda.empty_cache()
     gc.collect()
-
 
 # =============================================================================
 # Main Block
