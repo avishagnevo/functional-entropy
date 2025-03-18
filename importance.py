@@ -354,8 +354,30 @@ def compute_pixel_level_importance(model: nn.Module, image: torch.Tensor, label_
     return saliency_map.view(H, W)
 
 
+def load_pixel_info(path: str, saliency_map: torch.Tensor):
+    """
+    Loads already computed pixel information scores from the file and updates the saliency map.
+    Returns the updated saliency map and the starting index for new computations.
+    
+    :param path: File path containing previously computed pixel importance scores.
+    :param saliency_map: A tensor to update with loaded values.
+    :return: Updated saliency map and the starting index for further computations.
+    """
+    start_idx = 0
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            for line in f:
+                parts = line.strip().split(', ')
+                if len(parts) == 2:
+                    idx = int(parts[0].split(': ')[1])
+                    imp = float(parts[1].split(': ')[1])
+                    saliency_map[idx] = imp
+                    start_idx = max(start_idx, idx + 1)
+    return saliency_map, start_idx
+
+
 def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, label_idx: int, 
-                                           reg_params: RegParameters, save_path: str = 'pixel_info.txt', batch_size: int = 4) -> torch.Tensor:
+                                           reg_params: RegParameters, save_path: str = 'pixel_info.txt', batch_size: int = 64) -> torch.Tensor:
     """
     Computes an information map for a single image for a specific label using batched perturbations.
     
@@ -369,17 +391,16 @@ def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, 
     :param batch_size: Number of pixels to process in one batch.
     :return: A tensor of shape (H, W) with the importance score for each pixel.
     """
-    import gc
     # image shape: (1, 3, H, W)
     _, C, H, W = image.shape
     num_pixels = H * W
     saliency_map = torch.zeros((num_pixels,), device=image.device)
     
-    if os.path.exists(save_path):
-        os.remove(save_path)
+    # Load existing pixel information
+    saliency_map, start_idx = load_pixel_info(save_path, saliency_map)
     
     # Process the pixels in batches.
-    for batch_start in range(0, num_pixels, batch_size):
+    for batch_start in range(start_idx, num_pixels, batch_size):
         batch_indices = list(range(batch_start, min(batch_start + batch_size, num_pixels)))
         
         # Compute the importance values for the current batch.

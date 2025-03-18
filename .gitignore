@@ -42,3 +42,5 @@ checkpoints/*
 old_files/*
 images/*
 cifar10_models/*
+pixel_info_*
+pixels_info/*
