@@ -235,7 +235,7 @@ def generate_saliency_map(image_path: str, model: torch.nn.Module, labels: list,
     # Parse the filename to extract ground truth labels
     base_name = os.path.basename(image_path)
     name_no_ext, _ = os.path.splitext(base_name)
-    gt_labels = name_no_ext.split('_')
+    gt_labels = name_no_ext.split('_')[:2]
     if len(gt_labels) < 2:
         print("Warning: Less than 2 labels found in the filename. Expected format: Label1_Label2.png")
     
@@ -248,6 +248,8 @@ def generate_saliency_map(image_path: str, model: torch.nn.Module, labels: list,
             continue
         # Ensure the image tensor requires gradients
         img_tensor.requires_grad_(True)
+
+        print("the model prediction is:", model(img_tensor))
         
         # Compute the per-sample gradient of the softmax probability for the given label
         grad_tensor = compute_per_sample_gradient(model, img_tensor, label_idx)  # shape: (1, 3, 224, 224)
@@ -534,9 +536,13 @@ def main():
     print("Regularization parameters initialized. Using variance-based estimation.")
     
     # Example usage:
-    IMAGE_PATH = "images2explain/Horse_Zebra.png" #"images2explain/Giraffe_Lion.png"
-    generate_information_map(IMAGE_PATH, model, labels, reg_params)
-    #generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
+    IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
+    #IMAGE_PATH =  "images2explain/Horse_Zebra.png"
+    #IMAGE_PATH =  "images2explain/Zebra_Lion_3.png"
+    #IMAGE_PATH =  "images2explain/Lizard_Lizard_0.png"
+    #IMAGE_PATH =  "images2explain/Eagle_Deer_0.png"
+    #generate_information_map(IMAGE_PATH, model, labels, reg_params)
+    generate_saliency_map(IMAGE_PATH, model, labels, reg_params)
 
     stop
 
