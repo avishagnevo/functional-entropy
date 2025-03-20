@@ -424,6 +424,8 @@ def compute_pixel_level_importance_batch(model: nn.Module, image: torch.Tensor, 
             print_memory_usage()
             torch.cuda.empty_cache()
             gc.collect()
+            
+            return saliency_map.view(H, W)
     
     return saliency_map.view(H, W)
 
