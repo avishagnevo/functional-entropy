@@ -20,8 +20,8 @@ class Perturbation:
         :return: noisy tensor in the same shape as input
         """
 
-        return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
-        # return tens + torch.randn_like(tens)
+        #return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
+        return tens + torch.randn_like(tens)
 
     @classmethod
     def _add_noise_to_tensor_exept_pixel(cls, tens: torch.Tensor, pixel: int , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
