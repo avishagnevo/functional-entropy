@@ -182,6 +182,8 @@ def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str =
     :param estimation: Estimation method to use ('var' or 'ent').
     :return: A scalar importance measure.
     """
+    #TODO: get the softmax probability for the given label for each of the perturbed images.
+    #      Then, insert it into the Regularization.get_grad_sqrd_norm_mean function to get the importance measure for estimation=entropy
     importance = Regularization.get_grad_sqrd_norm_mean(gradients, n_samples, estimation)
     importance = importance.detach().clone()  # Ensure no graph connection
     
@@ -323,6 +325,8 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
     pertub_images.requires_grad_(True)
+    #TODO: Compute the softmax probability for the given label for each of the perturbed images.
+    #      Then, Insert it into the compute_importance function to get the importance measure for estimation=entropy
     importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
 
     pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM

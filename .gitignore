@@ -44,3 +44,5 @@ images/*
 cifar10_models/*
 pixel_info_*
 pixels_info/*
+Giraffe_Lion/*
+Horse_Zebra/*

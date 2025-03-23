@@ -374,6 +374,7 @@ class Regularization(object):
                         Otherwise, return the overall mean (scalar).
         :return: Tensor of shape (num_pixels,) if estimation=='var', else a scalar.
         """
+        #TODO: get the softmax of a given label of all of the pertubated images
         B, C, H, W = grad.shape
         num_pixels = B // n_samples  # number of groups (pixels)
         
@@ -383,11 +384,13 @@ class Regularization(object):
         # Compute the squared L2 norm for each sample in the group; result shape: (num_pixels, n_samples)
         group_norms_sq = torch.norm(grad_grouped, p=2, dim=(2, 3, 4)) ** 2
         
-        # Mean over the perturbations for each pixel
-        mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)
-        
         if estimation == 'var':
+            # Mean over the perturbations for each pixel
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)    
             return mean_sq_norm  # per-pixel vector of mean squared norms
+        elif estimation == 'ent':
+            #TODO: devide sq_norm by the softmaxes, and then calculate the mean
+            return 0
         else:
             return mean_sq_norm.mean()  # overall scalar average
 
