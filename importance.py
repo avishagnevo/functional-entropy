@@ -307,7 +307,7 @@ def load_config(config_path: str) -> dict:
 
 
 def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: list[int], 
-                              label_idx: int, reg_params: RegParameters, full_pertube: bool=False) -> float:
+                              label_idx: int, reg_params: RegParameters) -> float:
     """
     Computes the importance measure for a subset of pixels for a given label by perturbing the images
     on that subset, computing the softmax probability, and then calculating the gradient with respect
@@ -320,25 +320,15 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :param reg_params: Regularization parameters.
     :return: A scalar importance measure for the pixel subset.
     """
-    #print('images shape:', images.shape)
-    if not full_pertube:
-        pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    else:
-        pertub_images = Perturbation.perturb_tensor(images, pixels, reg_params.n_samples)
-    #print(f"Perturbed images shape: {pertub_images.shape}")
+    pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
-    #print(f"Per-sample gradient shape: {per_sample_grad.shape}")
     pertub_images.requires_grad_(True)
     importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
-        
-    #print_memory_usage()
+
     pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM
     per_sample_grad = per_sample_grad.detach()#.clone()
-    #print_memory_usage()
 
     del pertub_images, per_sample_grad  # Delete the intermediate tensors to free up memory
-    #torch.cuda.empty_cache()  # Clear GPU memory
-    #gc.collect()  # Run garbage collection
     return importance
 
 def print_memory_usage():

@@ -480,3 +480,4 @@ class RegParameters(object):
         self.optim_method = optim_method
         self.n_samples = n_samples
         self.grad = grad
+        self.c = 0.5

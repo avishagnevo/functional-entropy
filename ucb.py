@@ -10,14 +10,58 @@ import os
 import gc
 import matplotlib.pyplot as plt
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+def ensure_dir_exists(file_path):
+    """
+    Ensures that the directory for the given file path exists.
+    If it does not exist, it creates the directory.
+    """
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+ 
+def log_csv_entry(csv_file, row):
+    """
+    Appends a single row (dict with known keys) to a CSV file.
+    Keys should match the columns: 
+      'ucb_iteration', 'idx', 'ucb_value', 'importance_value', 'n_idx', 'n_total'.
+    """
+    fieldnames = ['ucb_iteration', 'idx', 'ucb_value', 'importance_value', 'n_idx', 'n_total']
+    write_header = not os.path.exists(csv_file) or os.path.getsize(csv_file) == 0
+    with open(csv_file, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writerow(row)
+
+def log_csv_header(csv_file):
+    """
+    Writes the header row to a CSV file.
+    """
+    ensure_dir_exists(csv_file)
+    fieldnames = ['ucb_iteration', 'idx', 'ucb_value', 'importance_value', 'n_idx', 'n_total']
+    with open(csv_file, mode='w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+def log_csv_batch(csv_file, iteration, indices, ucb_scores, importance_est, n_i, sum_n_i):
+    """
+    Appends a batch of rows to a CSV file.
+    """
+    with open(csv_file, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        for idx in indices:
+            row = [iteration, idx, ucb_scores[idx], importance_est[idx], n_i[idx], sum_n_i]
+            writer.writerow(row)
+
 
 def compute_importance_batch(
     model: nn.Module,
     image: torch.Tensor,
     label_idx: int,
     reg_params: RegParameters,
-    save_path: str = 'pixel_info_sublist.txt',
     batch_size: int = 64,
     pixel_list: Optional[List[int]] = None
 ) -> torch.Tensor:
@@ -38,20 +82,20 @@ def compute_importance_batch(
     # 1) Infer shape and number of pixels
     _, C, H, W = image.shape
     total_pixels = H * W
-    flag=False
 
     # 2) If no pixel_list provided, default to all pixels in [0..H*W-1]
     if pixel_list is None:
         pixel_list = list(range(total_pixels))
-        flag = True
 
     # 3) Prepare an output tensor for the subset, shape [len(pixel_list)]
     device_ = image.device
     subset_size = len(pixel_list)
     saliency_subset = torch.zeros((subset_size,), device=device_)
+    iter_count = 0
 
     # 4) Process the subset in batches
     for start_idx in range(0, subset_size, batch_size):
+        iter_count += 1
         end_idx = min(start_idx + batch_size, subset_size)
         batch_indices = pixel_list[start_idx:end_idx]
 
@@ -60,46 +104,44 @@ def compute_importance_batch(
         #     a 1D tensor of shape (len(batch_indices),)
         importance_batch = compute_subset_importance(
             model=model,
-            image=image,
-            pixel_indices=batch_indices,
+            images=image,
+            pixels=batch_indices,
             label_idx=label_idx,
-            reg_params=reg_params,
-            full_pertube=flag
+            reg_params=reg_params
         )  
         # e.g., shape: (len(batch_indices),)
+        #print(importance_batch.shape, "importance_batch.shape,  shape: (len(batch_indices),)")
 
         saliency_subset[start_idx : end_idx] = importance_batch
 
-        # 4c) Append lines to the file (like the original function)
-        #lines_to_write = []
-        #for local_i, imp_val in zip(batch_indices, importance_batch):
-        #    lines_to_write.append(f'idx: {local_i}, pixel importance: {imp_val.item()}\n')
-        #with open(save_path, 'a') as f:
-        #    f.writelines(lines_to_write)
+        if iter_count == 10:
+            return saliency_subset #cancel this line to get the full image
 
     # 5) Return the importance for the requested subset.
     #    The caller can reshape if needed (e.g., (H, W) if the subset is all pixels).
     return saliency_subset
 
 
-def log_csv_entry(csv_file, row):
+def compute_ucb_scores(importance_est, n_i, sum_n_i, c):
     """
-    Appends a single row (dict with known keys) to a CSV file.
-    Keys should match the columns: 
-      'ucb_iteration', 'idx', 'ucb_value', 'importance_value', 'n_idx', 'n_total'.
+    Computes the UCB scores for each pixel based on the current estimates and counts.
     """
-    fieldnames = ['ucb_iteration', 'idx', 'ucb_value', 'importance_value', 'n_idx', 'n_total']
-    write_header = not os.path.exists(csv_file) or os.path.getsize(csv_file) == 0
-    with open(csv_file, mode='a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+    num_pixels = len(n_i)
+    ucb_scores = np.zeros(num_pixels, dtype=np.float32)
+    for i in range(num_pixels):
+        if n_i[i] == 0:
+            # Large bonus to ensure exploration
+            bonus = 1e6
+        else:
+            bonus = c * np.sqrt(np.log(sum_n_i) / n_i[i])
+        ucb_scores[i] = importance_est[i] + bonus
+    return ucb_scores
+        
 
 def do_initial_pass_uniform(
     model, image, label_idx, reg_params,
     global_batch_size_for_perturbations,
-    n_init, save_path, num_pixels
+    n_init, csv_path, num_pixels
 ):
     """
     1) Samples each pixel exactly n_init times (uniform).
@@ -117,17 +159,34 @@ def do_initial_pass_uniform(
         image=image,
         label_idx=label_idx,
         reg_params=reg_params,
-        save_path=save_path,
         batch_size=global_batch_size_for_perturbations,
         pixel_list=None  # or range(num_pixels)
     )
+    print('uniform_init_map.shape:', uniform_init_map.shape)
     
     # Restore original n_samples
     reg_params.n_samples = old_n_samples
-    return uniform_init_map
+
+    _, C, H, W = image.shape
+    total_pixels = H * W
+    pixel_list = list(range(total_pixels))
+    n_total = n_init * total_pixels
+
+    importance_est = np.zeros(num_pixels, dtype=np.float32)
+    n_i = np.zeros(num_pixels, dtype=np.int32)
+
+    for i in range(num_pixels):
+        n_i[i] = n_init
+        importance_est[i] = uniform_init_map[i].item()
+
+    ucb_scores = compute_ucb_scores(importance_est, n_i, n_total, reg_params.c)
+
+    log_csv_batch(csv_path, 0, pixel_list, ucb_scores, importance_est, n_i, n_total)
+
+    return uniform_init_map, n_i, importance_est
 
 def do_ucb_iteration_partialsort(
-    iteration, top_percent, c, 
+    iteration, top_percent, 
     importance_est, n_i, sum_n_i,
     compute_importance_batch,
     model, image, label_idx, reg_params, global_batch_size_for_perturbations,
@@ -146,14 +205,7 @@ def do_ucb_iteration_partialsort(
     k = max(1, int(top_percent * num_pixels))
     
     # 1) Compute UCB score
-    ucb_scores = np.zeros(num_pixels, dtype=np.float32)
-    for i in range(num_pixels):
-        if n_i[i] == 0:
-            # Large bonus to ensure exploration
-            bonus = 1e6
-        else:
-            bonus = c * np.sqrt(np.log(sum_n_i) / n_i[i])
-        ucb_scores[i] = importance_est[i] + bonus
+    ucb_scores = compute_ucb_scores(importance_est, n_i, sum_n_i, reg_params.c)
     
     # 2) Partial-sort => top-k
     top_k_indices = np.argpartition(ucb_scores, -k)[-k:]
@@ -164,7 +216,6 @@ def do_ucb_iteration_partialsort(
         image=image,
         label_idx=label_idx,
         reg_params=reg_params,
-        save_path="tmp_UCB_partial_sort.txt",  # or pass a unique name
         batch_size=global_batch_size_for_perturbations,
         pixel_list=top_k_indices
     )
@@ -182,16 +233,7 @@ def do_ucb_iteration_partialsort(
     
     # 5) Log results to CSV
     new_sum_n_i = np.sum(n_i)
-    for idx in top_k_indices:
-        row = {
-            'ucb_iteration': iteration,
-            'idx': int(idx),
-            'ucb_value': float(ucb_scores[idx]),
-            'importance_value': float(importance_est[idx]),
-            'n_idx': int(n_i[idx]),
-            'n_total': int(new_sum_n_i),
-        }
-        log_csv_entry(csv_path, row)
+    log_csv_batch(csv_path, iteration, top_k_indices, ucb_scores, importance_est, n_i, new_sum_n_i)
     
     return importance_est, n_i
 
@@ -205,7 +247,6 @@ def compute_pixel_importance_ucb_wrapper_partialsort(
     global_batch_size_for_perturbations: int,
     n_init: int,
     csv_path: str = "ucb_log.csv",
-    uniform_log_path: str = "pixel_info_init.txt"
 ) -> torch.Tensor:
     """
       1) Do an initial uniform pass over all pixels with n_init samples each.
@@ -228,33 +269,27 @@ def compute_pixel_importance_ucb_wrapper_partialsort(
     # (1) Initial pass (uniform)
     # Let the uniform function do its normal logic for all pixels:
     # We'll override n_samples in do_initial_pass_uniform to n_init for now.
-    uniform_init_map = do_initial_pass_uniform(
+    uniform_init_map, n_i, importance_est = do_initial_pass_uniform(
         model=model,
         image=image,
         label_idx=label_idx,
         reg_params=reg_params,
         global_batch_size_for_perturbations=global_batch_size_for_perturbations,
         n_init=n_init,
-        save_path=uniform_log_path,
-        num_pixels=num_pixels
+        num_pixels=num_pixels,
+        csv_path=csv_path
     )
-    # uniform_init_map => (num_pixels,)
-    # Fill n_i & importance_est
-    for i in range(num_pixels):
-        n_i[i] = n_init
-        importance_est[i] = uniform_init_map[i].item()
-    
+
     # (2) Main UCB loop
     for t in range(1, ucb_iterations + 1):
         sum_n_i = max(1, np.sum(n_i))
         importance_est, n_i = do_ucb_iteration_partialsort(
             iteration=t,
             top_percent=top_percent,
-            c=reg_params.c,  # or similar param
             importance_est=importance_est,
             n_i=n_i,
             sum_n_i=sum_n_i,
-            compute_pixel_level_importance_batch=compute_importance_batch,
+            compute_importance_batch=compute_importance_batch,
             model=model,
             image=image,
             label_idx=label_idx,
@@ -269,6 +304,24 @@ def compute_pixel_importance_ucb_wrapper_partialsort(
     return final_map
 
 
+def load_importance_map_from_csv(H: int, W: int ,csv_path: str) -> np.ndarray:
+    """
+    Loads the final importance map from a CSV file.
+    """
+    with open(csv_path, mode='r') as f:
+        reader = csv.reader(f)
+        rows = [row for row in reader][1:]  # Skip header
+        indices = [int(row[1]) for row in rows]
+        values = [float(row[3]) for row in rows]
+
+    num_pixels = H * W
+    final_map = np.zeros(num_pixels, dtype=np.float32)
+    for idx, val in zip(indices, values):
+        final_map[idx] = val
+
+    final_map = torch.from_numpy(final_map.reshape(H, W))    
+    return final_map
+
 def generate_importance_map_ucb(
     image_path: str, 
     model: nn.Module, 
@@ -278,7 +331,8 @@ def generate_importance_map_ucb(
     top_percent: float = 0.1,
     batch_size_for_perturbations: int = 64,
     n_init: int = 3,
-    csv_path: str = "ucb_log.csv"
+    csv_path: str = "ucb_log.csv",
+    calculate: bool = True
 ) -> None:
     """
     Similar to the old `generate_information_map`, but uses the new UCB-based partial sort approach.
@@ -309,7 +363,6 @@ def generate_importance_map_ucb(
     # 3) For each ground-truth label in the filename, do the UCB approach
     info_maps = {}
     for label in gt_labels:
-        print(f"[UCB] Computing information map for label: {label}")
         try:
             label_idx = labels.index(label)
         except ValueError:
@@ -317,22 +370,38 @@ def generate_importance_map_ucb(
             continue
 
         # We choose a separate text file for the initial pass log
-        uniform_log_path = f"pixel_info_init_{name_no_ext}_{label}.txt"
+        save_dir = f"{name_no_ext}/{label}/"
+        csv_path = f"{save_dir}ucb_log.csv"
+        ensure_dir_exists(csv_path)
 
-        # 4) Call the new modular UCB-based function
-        sal_map = compute_pixel_importance_ucb_wrapper_partialsort(
-            model=model,
-            image=img_tensor,
-            label_idx=label_idx,
-            reg_params=reg_params,
-            ucb_iterations=ucb_iterations,
-            top_percent=top_percent,
-            global_batch_size_for_perturbations=batch_size_for_perturbations,
-            n_init=n_init,
-            csv_path=csv_path,
-            uniform_log_path=uniform_log_path
-        )
-        info_maps[label] = sal_map.detach().cpu().numpy()
+        if calculate:
+            print(f"[UCB] Computing information map for label: {label}")
+            log_csv_header(csv_path)
+
+            # 4) Call the new modular UCB-based function
+            sal_map = compute_pixel_importance_ucb_wrapper_partialsort(
+                model=model,
+                image=img_tensor,
+                label_idx=label_idx,
+                reg_params=reg_params,
+                ucb_iterations=ucb_iterations,
+                top_percent=top_percent,
+                global_batch_size_for_perturbations=batch_size_for_perturbations,
+                n_init=n_init,
+                csv_path=csv_path
+            )
+            sal_map = sal_map.detach().cpu().numpy()
+        else:
+            _, C, H, W = img_tensor.shape
+            sal_map = load_importance_map_from_csv(H, W ,csv_path) 
+
+            sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
+            sal_map_uint8 = (sal_map.detach().cpu().numpy() * 255).astype(np.uint8)
+            colored_sal_map = cv.applyColorMap(sal_map_uint8, cv.COLORMAP_JET)
+            alpha = 0.5  # Transparency factor
+            sal_map = cv.addWeighted(img, alpha, colored_sal_map, 1 - alpha, 0)
+
+        info_maps[label] = sal_map
 
         # optional memory cleanup
         del sal_map
@@ -346,13 +415,14 @@ def generate_importance_map_ucb(
     axes[0].set_title("Original Image")
     axes[0].axis("off")
     for i, (label, info_map) in enumerate(info_maps.items(), start=1):
-        axes[i].imshow(info_map, cmap='hot')
+        axes[i].imshow(info_map, cmap='twilight_shifted')
         axes[i].set_title(f"UCB Info Map: {label}")
         axes[i].axis("off")
     plt.tight_layout()
     plt.show()
 
-    info_map_path = f"ucb_info_map_{name_no_ext}.png"
+    save_dir = save_dir.split('/')[0] + '/'
+    info_map_path = f"{save_dir}ucb_info_map.png"
     fig.savefig(info_map_path)
     print(f"UCB-based information map saved to {info_map_path}")
 
@@ -371,9 +441,11 @@ def main():
     reg_params = RegParameters()
     reg_params.estimation = 'var'  # e.g. variance-based
     reg_params.n_samples = 2
+    reg_params.c = 0.25
     # you might also specify reg_params.c, reg_params.n_samples, etc.
 
-    IMAGE_PATH = "images2explain/Horse_Zebra.png"
+    #IMAGE_PATH = "images2explain/Horse_Zebra.png"
+    IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
 
     # We'll run 3 UCB iterations, picking top 10%, with an initial pass of 2 samples/pixel
     generate_importance_map_ucb(
@@ -381,9 +453,13 @@ def main():
         model=model,
         labels=labels,
         reg_params=reg_params,
-        ucb_iterations=1,
-        top_percent=0.1,
+        ucb_iterations=5,
+        top_percent=0.15,
         batch_size_for_perturbations=64,
-        n_init=2,
-        csv_path="ucb_log.csv"
+        n_init=5,
+        csv_path="ucb_log.csv",
+        calculate=True
     )
+
+if __name__ == "__main__":
+    main()
