@@ -9,7 +9,7 @@ from PIL import Image
 from captum.attr import IntegratedGradients, NoiseTunnel
 from importance import prepare_image, get_model_labels, load_model, get_labels
 
-def _generate_importance_map_vargrad(
+def generate_importance_map_vargrad_overlay(
     image_path: str,
     model: nn.Module,
     target_label: int,
