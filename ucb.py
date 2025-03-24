@@ -466,6 +466,8 @@ def generate_importance_map_ucb(
     torch.cuda.empty_cache()
     gc.collect()
 
+    
+
 
 def main():
     # Example usage
