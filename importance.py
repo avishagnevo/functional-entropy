@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from regularization import Perturbation, Regularization, RegParameters
 from models import AnimalClassifier
 from data import get_train_data, get_valid_data
-from typing import List  
+from typing import List , Optional 
 import json
 import matplotlib.pyplot as plt
 import functorch
@@ -172,19 +172,36 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     
     return per_sample_grad
 
+def compute_softmax_prob(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
+    """
+    Computes the softmax probability for a specified label for each input image.
+    
+    :param model: The neural network model.
+    :param
+    :param label_idx: The index of the label for which to compute the probability.
+    :return: A tensor of shape (B,) with the softmax probability for each image.
+    """
+    # Compute the output logits for each image
+    logits = model(images)
+    
+    # Compute the softmax probabilities for the specified label
+    softmax_probs = F.softmax(logits, dim=1)[:, label_idx]
+    
+    return softmax_probs
 
 
-def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str = 'var') -> float:
+
+def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str = 'var', softmax_prob : Optional[torch.Tensor] = None) -> float:
     """
     Computes an importance measure from the gradients using the Regularization helper.
     
     :param gradients: Tensor of gradients of shape (B, C, H, W).
     :param estimation: Estimation method to use ('var' or 'ent').
+    :param n_samples: Number of samples used for the perturbation.
+    :param softmax_prob: The softmax probability for the specified label for each input image.
     :return: A scalar importance measure.
     """
-    #TODO: get the softmax probability for the given label for each of the perturbed images.
-    #      Then, insert it into the Regularization.get_grad_sqrd_norm_mean function to get the importance measure for estimation=entropy
-    importance = Regularization.get_grad_sqrd_norm_mean(gradients, n_samples, estimation)
+    importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
     importance = importance.detach().clone()  # Ensure no graph connection
     
     return importance
@@ -325,10 +342,13 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
     pertub_images.requires_grad_(True)
-    #TODO: Compute the softmax probability for the given label for each of the perturbed images.
-    #      Then, Insert it into the compute_importance function to get the importance measure for estimation=entropy
-    importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
 
+    if reg_params.estimation == 'ent':
+        softmax_prob = compute_softmax_prob(model, pertub_images, label_idx)
+        importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation, softmax_prob=softmax_prob)
+    else:
+        importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
+    
     pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM
     per_sample_grad = per_sample_grad.detach()#.clone()
 

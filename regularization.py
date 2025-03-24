@@ -4,7 +4,7 @@ An implementation of the paper: "Removing Bias in Multi-modal Classifiers: Regul
 """
 
 import torch
-from typing import List  
+from typing import List  , Optional
 
 
 class Perturbation:
@@ -361,7 +361,7 @@ class Regularization(object):
         return torch.mean(batch_statistics)
 
     @classmethod
-    def get_grad_sqrd_norm_mean(cls, grad: torch.Tensor, n_samples: int, estimation: str = 'var') -> torch.Tensor:
+    def get_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, estimation: str = 'var', softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Calculates the mean squared norm of gradients for each pixel group.
         
@@ -370,11 +370,11 @@ class Regularization(object):
         
         :param grad: Tensor of gradients with shape (B, C, H, W)
         :param n_samples: Number of perturbations per pixel.
-        :param estimation: If 'var', return the per-group mean squared norm as a vector.
-                        Otherwise, return the overall mean (scalar).
+        :param estimation: If 'var', return the per-group mean squared norm as a vector. if 'ent', return the
+        per-group mean squared norm divided by the corresponding softmax probability. Otherwise, return the overall mean (scalar).
+        :param softmax_prob: Tensor of shape (B,) with the softmax probabilities for each perturbation.
         :return: Tensor of shape (num_pixels,) if estimation=='var', else a scalar.
         """
-        #TODO: get the softmax of a given label of all of the pertubated images
         B, C, H, W = grad.shape
         num_pixels = B // n_samples  # number of groups (pixels)
         
@@ -385,13 +385,20 @@ class Regularization(object):
         group_norms_sq = torch.norm(grad_grouped, p=2, dim=(2, 3, 4)) ** 2
         
         if estimation == 'var':
-            # Mean over the perturbations for each pixel
+            # Mean over the perturbations' squared norms
             mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)    
             return mean_sq_norm  # per-pixel vector of mean squared norms
         elif estimation == 'ent':
-            #TODO: devide sq_norm by the softmaxes, and then calculate the mean
-            return 0
+            # Devide sq_norm by correspoding softmax_prob, and then calculate the mean
+            assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
+            # Normalize by the softmax probability for each group
+            group_norms_sq_normalized = group_norms_sq / softmax_prob.view(num_pixels, n_samples)
+            # Mean over the perturbations for each pixel
+            mean_sq_norm_normalized = group_norms_sq_normalized.mean(dim=1)  # shape: (num_pixels,)
+            return mean_sq_norm_normalized  # per-pixel vector of mean squared norms
         else:
+            # Mean over all
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)   v
             return mean_sq_norm.mean()  # overall scalar average
 
     

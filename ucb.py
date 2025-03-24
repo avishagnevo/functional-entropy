@@ -489,12 +489,12 @@ def main():
         model=model,
         labels=labels,
         reg_params=reg_params,
-        ucb_iterations=5,
+        ucb_iterations=0,
         top_percent=0.15,
         batch_size_for_perturbations=64,
         n_init=1,
         csv_path="ucb_log.csv",
-        calculate=True
+        calculate=False
     )
 
 if __name__ == "__main__":
