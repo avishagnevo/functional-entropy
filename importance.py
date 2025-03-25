@@ -342,13 +342,13 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
     per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
     pertub_images.requires_grad_(True)
-
-    if reg_params.estimation == 'ent':
-        softmax_prob = compute_softmax_prob(model, pertub_images, label_idx)
-        importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation, softmax_prob=softmax_prob)
-    else:
-        importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation)
+    softmax_prob = None
     
+    if reg_params.estimation != 'var':
+        softmax_prob = compute_softmax_prob(model, pertub_images, label_idx)
+
+    importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation, softmax_prob=softmax_prob)
+
     pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM
     per_sample_grad = per_sample_grad.detach()#.clone()
 
