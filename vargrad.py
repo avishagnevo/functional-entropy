@@ -63,12 +63,12 @@ def generate_importance_map_vargrad_overlay(
     colored_attr_map = cv.resize(colored_attr_map, (orig_img.shape[1], orig_img.shape[0]))
     
     # 7) Overlay the heatmap on the original image.
-    overlay = cv.addWeighted(orig_img, 0.5, colored_attr_map, 0.5, 0)
+    overlay = cv.addWeighted(orig_img, 0.3, colored_attr_map, 0.7, 0) 
     
     # 8) Create a figure, display and save the result.
-    fig, ax = plt.subplots(figsize=(8,8))
+    fig, ax = plt.subplots(figsize=(12,12))
     ax.imshow(cv.cvtColor(overlay, cv.COLOR_BGR2RGB))
-    ax.set_title("VarGrad Attribution Map (via NoiseTunnel)")
+    ax.set_title(f"VarGrad Attribution Map {target_label_name}")
     ax.axis("off")
     
     # Ensure the save directory exists.
@@ -142,9 +142,9 @@ def generate_importance_map_vargrad(
     colored_attr_map = cv.resize(colored_attr_map, (orig_img.shape[1], orig_img.shape[0]))
     
     # 7) Display and save only the attribution map.
-    fig, ax = plt.subplots(figsize=(8,8))
+    fig, ax = plt.subplots(figsize=(12,12))
     ax.imshow(colored_attr_map)
-    ax.set_title("Attribution Map (twilight_shifted)")
+    ax.set_title(f"VarGrad Attribution Map {target_label_name} ")
     ax.axis("off")
     
     # Ensure the save directory exists.
@@ -152,7 +152,7 @@ def generate_importance_map_vargrad(
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     info_map_path = os.path.join(save_dir, f"{target_label_name}_attr.png")
-    fig.savefig(info_map_path, bbox_inches='tight', pad_inches=0)
+    fig.savefig(info_map_path)
     print(f"Attribution map saved to {info_map_path}")
     
     plt.show()
@@ -162,18 +162,21 @@ def generate_importance_map_vargrad(
 def main():
     # Example usage:
     PATH = "checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
+    PATH = "checkpoints/checkpoint_47epoch_0.9576acc_0.9529valacc_4c.pth"
     IMAGE_PATH = "images2explain/Horse_Zebra.png"
     #IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
+    IMAGE_PATH = "images2explain/Zebra_Lion.png"
+    IMAGE_PATH = "images2explain/Lion_Horse.png"
 
     labels = get_model_labels()
     model = load_model(PATH, labels)
 
     gt_labels = get_labels(IMAGE_PATH)
-    target_label_name = gt_labels[1]
+    target_label_name = gt_labels[0]
     target_label = labels.index(target_label_name)
 
     # Compute and display the importance map using the new approach.
-    overlay = generate_importance_map_vargrad(
+    overlay = generate_importance_map_vargrad_overlay(
         IMAGE_PATH, model, target_label, target_label_name , nt_samples=20, stdevs=0.02
     )
 
