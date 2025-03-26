@@ -498,7 +498,7 @@ def main():
         batch_size_for_perturbations=64,
         n_init=2,
         csv_path="ucb_log.csv",
-        calculate=True
+        calculate=False
     )
 
     IMAGE_PATH = "images2explain/Horse_Zebra.png"
@@ -514,7 +514,7 @@ def main():
         batch_size_for_perturbations=64,
         n_init=1,
         csv_path="ucb_log.csv",
-        calculate=True
+        calculate=False
     )
 
 if __name__ == "__main__":
