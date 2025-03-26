@@ -39,6 +39,7 @@ terraform.rc
 # Ignore data directory
 animals-detection-images-dataset/*
 checkpoints/*
+checkpoints_15/*
 old_files/*
 images/*
 cifar10_models/*
