@@ -103,7 +103,6 @@ def compute_importance_batch(
         if sal_map is not None:
             sal_map = sal_map.to(device_)
             sal_map = sal_map.view(-1)
-            #print('sal_map.shape:', sal_map.shape)
             return sal_map
 
         pixel_list = list(range(total_pixels))
@@ -336,21 +335,20 @@ def load_importance_map_from_csv(H: int, W: int ,csv_path: str) -> np.ndarray:
     """
     Loads the final importance map from a CSV file.
     """
+    num_pixels = H * W
+    final_map = np.zeros(num_pixels, dtype=np.float32)
+
     with open(csv_path, mode='r') as f:
         reader = csv.reader(f)
         rows = [row for row in reader][1:]  # Skip header
         indices = [int(row[1]) for row in rows]
         values = [float(row[3]) for row in rows]
-        print(len(rows))
-        print(rows[-1]) 
-        last_ucv_iteration = rows[-1][0]
+    
+    if len(rows) == 0:
+        return final_map, 0
+    
+    last_ucv_iteration = rows[-1][0]
 
-    print("last_idx:", indices[-1])
-    print("last_value:", values[-1])
-     
-
-    num_pixels = H * W
-    final_map = np.zeros(num_pixels, dtype=np.float32)
     for idx, val in zip(indices, values):
         final_map[idx] = val
 
@@ -490,39 +488,20 @@ def main():
     reg_params.estimation = 'var'  # e.g. variance-based
     reg_params.n_samples = 2
     reg_params.c = 0.25
-    # you might also specify reg_params.c, reg_params.n_samples, etc.
 
     IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
 
-    # We'll run 3 UCB iterations, picking top 10%, with an initial pass of 2 samples/pixel
-    generate_importance_map_ucb(
-        image_path=IMAGE_PATH,
-        model=model,
-        labels=labels,
-        reg_params=reg_params,
-        ucb_iterations=2,
-        top_percent=0.7,
-        batch_size_for_perturbations=64,
-        n_init=1,
-        csv_path="ucb_log.csv",
-        calculate=False
-    )
-    stop
-
-    IMAGE_PATH = "images2explain/Horse_Zebra.png"
-
-    # We'll run 3 UCB iterations, picking top 10%, with an initial pass of 2 samples/pixel
     generate_importance_map_ucb(
         image_path=IMAGE_PATH,
         model=model,
         labels=labels,
         reg_params=reg_params,
         ucb_iterations=0,
-        top_percent=0.15,
+        top_percent=0.7,
         batch_size_for_perturbations=64,
-        n_init=1,
+        n_init=3,
         csv_path="ucb_log.csv",
-        calculate=False
+        calculate=True
     )
 
 if __name__ == "__main__":

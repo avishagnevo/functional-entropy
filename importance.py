@@ -201,7 +201,12 @@ def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str =
     :param softmax_prob: The softmax probability for the specified label for each input image.
     :return: A scalar importance measure.
     """
-    importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
+    importance = Regularization.get_importance_by_estimation_c(gradients, n_samples, estimation, softmax_prob)
+    #print("importance_c:", importance)
+    #importance = Regularization._get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
+    #print("importance_*:", importance)
+    #importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
+    #print("importance:", importance)
     importance = importance.detach().clone()  # Ensure no graph connection
     
     return importance
@@ -529,7 +534,7 @@ def generate_information_map(image_path: str, model: nn.Module, labels: list,
     gc.collect()
 
 
-def prepare_image(image_path: str) -> torch.Tensor:
+def _prepare_image(image_path: str) -> torch.Tensor:
     # Load and preprocess the image
     img = cv.imread(image_path)
     if img is None:
@@ -544,6 +549,32 @@ def prepare_image(image_path: str) -> torch.Tensor:
     img_tensor = img_tensor.unsqueeze(0).to(device)  # Add batch dimension
     
     return img, img_tensor
+
+
+def prepare_image(image_path: str) -> torch.Tensor:
+    # Load the image using OpenCV
+    img = cv.imread(image_path)
+    if img is None:
+        print(f"Error loading image from {image_path}")
+        return None
+    
+    # Convert from BGR to RGB and resize to (224, 224)
+    img = cv.cvtColor(img, cv.COLOR_BGR2RGB)
+    img = cv.resize(img, (224, 224))
+    
+    # Convert image to a tensor and scale pixel values to [0, 1]
+    img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
+
+    # Apply normalization: (value - mean) / std
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+    img_tensor = (img_tensor - mean) / std
+
+    # Add batch dimension and move to device
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+    
+    return img, img_tensor
+
 
 def get_labels(image_path: str) -> List[str]:
     # Parse the filename to extract ground truth labels

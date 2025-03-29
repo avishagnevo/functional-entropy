@@ -13,7 +13,7 @@ import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from captum.attr import IntegratedGradients, NoiseTunnel
+from captum.attr import IntegratedGradients, NoiseTunnel, Saliency
 
 
 def generate_importance_map_vargrad_overlay(
@@ -204,8 +204,9 @@ def generate_importance_map_vargrad(
         # Use the input itself as the baseline (alternatively, you might use zeros)
         baseline = img_tensor
         
-        ig = IntegratedGradients(model)
-        nt = NoiseTunnel(ig)
+        '''
+        #ig = IntegratedGradients(model)
+        #nt = NoiseTunnel(ig)
         attributions, _ = nt.attribute(
             img_tensor,
             nt_type='vargrad',
@@ -215,6 +216,17 @@ def generate_importance_map_vargrad(
             target=label_idx,
             return_convergence_delta=True
         )
+        '''
+        saliency = Saliency(model)
+        nt = NoiseTunnel(saliency)
+        attributions= nt.attribute(
+            img_tensor,
+            nt_type='smoothgrad_sq',
+            stdevs=stdevs,
+            nt_samples=nt_samples,
+            target=label_idx
+        )
+        
         # 4) Process attributions: average over channels and normalize.
         attr_map = attributions.detach().cpu().numpy()[0]  # shape: (C, H, W)
         attr_map = np.mean(attr_map, axis=0)                # shape: (H, W)
@@ -232,7 +244,8 @@ def generate_importance_map_vargrad(
     fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
     
     # Plot original image.
-    axes[0].imshow(cv.cvtColor(orig_img, cv.COLOR_BGR2RGB))
+    #axes[0].imshow(cv.cvtColor(orig_img, cv.COLOR_BGR2RGB))
+    axes[0].imshow(orig_img)
     axes[0].set_title("Original Image")
     axes[0].axis("off")
     
@@ -245,7 +258,7 @@ def generate_importance_map_vargrad(
     plt.tight_layout()
     
     # 7) Save the figure.
-    save_dir = "vargrad_maps"
+    save_dir = "vargrad_sal_maps"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     save_path = os.path.join(save_dir, "vargrad_info_map.png")
@@ -272,7 +285,7 @@ def main():
         model=model,
         labels=labels,
         nt_samples=20,
-        stdevs=1.0 #0.02
+        stdevs=1.0
     )
 
 

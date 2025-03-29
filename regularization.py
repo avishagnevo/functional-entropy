@@ -59,6 +59,7 @@ class Perturbation:
         :param over_dim: (unused here, kept for compatibility)
         :return: tens with noise added only at the specified positions.
         """
+
         BnL, F = tens.shape
         HW = F // num_channels
         L = len(pixels)
@@ -361,7 +362,50 @@ class Regularization(object):
         return torch.mean(batch_statistics)
 
     @classmethod
-    def get_importance_by_estimation_alternative(cls, grad: torch.Tensor, n_samples: int, 
+    def get_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, estimation: str = 'var', softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Calculates the mean squared norm of gradients for each pixel group.
+        
+        Assumes grad is of shape (B, C, H, W) with B = n_samples * num_pixels, where each contiguous 
+        block of n_samples corresponds to a single pixel's perturbations.
+        
+        :param grad: Tensor of gradients with shape (B, C, H, W)
+        :param n_samples: Number of perturbations per pixel.
+        :param estimation: If 'var', return the per-group mean squared norm as a vector. if 'ent', return the
+        per-group mean squared norm divided by the corresponding softmax probability. Otherwise, return the overall mean (scalar).
+        :param softmax_prob: Tensor of shape (B,) with the softmax probabilities for each perturbation.
+        :return: Tensor of shape (num_pixels,) if estimation=='var', else a scalar.
+        """
+        B, C, H, W = grad.shape
+        num_pixels = B // n_samples  # number of groups (pixels)
+        
+        # Reshape to (num_pixels, n_samples, C, H, W)
+        grad_grouped = grad.view(num_pixels, n_samples, C, H, W)
+        
+        # Compute the squared L2 norm for each sample in the group; result shape: (num_pixels, n_samples)
+        group_norms_sq = torch.norm(grad_grouped, p=2, dim=(2, 3, 4)) ** 2
+        
+        if estimation == 'var':
+            # Mean over the perturbations' squared norms
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)    
+            return mean_sq_norm  # per-pixel vector of mean squared norms
+        elif estimation == 'ent':
+            # Devide sq_norm by correspoding softmax_prob, and then calculate the mean
+            assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
+            # Normalize by the softmax probability for each group
+            group_norms_sq_normalized = group_norms_sq / softmax_prob.view(num_pixels, n_samples)
+            # Mean over the perturbations for each pixel
+            mean_sq_norm_normalized = group_norms_sq_normalized.mean(dim=1)  # shape: (num_pixels,)
+            return mean_sq_norm_normalized  # per-pixel vector of mean squared norms
+        else:
+            # Mean over all
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)   v
+            return mean_sq_norm.mean()  # overall scalar average
+
+    
+    
+    @classmethod
+    def _get_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, 
                                                 estimation: str = 'var', 
                                                 softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
@@ -409,6 +453,66 @@ class Regularization(object):
         else:
             # Return overall scalar average
             return group_importance.mean()
+        
+
+    @classmethod
+    def get_importance_by_estimation_c(cls, grad: torch.Tensor, n_samples: int, 
+                                    estimation: str = 'var', 
+                                    softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Calculates the importance of each pixel group by:
+        1. Computing the L2 norm per channel over the spatial dimensions (for each perturbation sample).
+        2. Squaring the per-channel norm.
+        3. Averaging these squared values over the n_samples for each channel independently.
+        4. Finally, averaging over the channels to produce a single importance value per pixel.
+        
+        This produces a per-pixel importance vector (of shape (num_pixels,)), which can be reshaped to (H, W).
+        
+        :param grad: Tensor of gradients with shape (B, C, H, W) where B = n_samples * num_pixels.
+        :param n_samples: Number of perturbations per pixel.
+        :param estimation: 
+            - If 'var', returns the per-group importance as described.
+            - If 'ent', returns the per-group importance normalized by softmax_prob.
+            - Otherwise, returns the overall mean as a scalar.
+        :param softmax_prob: Tensor of shape (B,) with softmax probabilities for each perturbation 
+                            (required if estimation == 'ent').
+        :return: Tensor of shape (num_pixels,) if estimation is 'var' or 'ent', else a scalar.
+        """
+        B, C, H, W = grad.shape
+        num_pixels = B // n_samples  # total number of pixels
+        
+        # Reshape gradients to group the n_samples for each pixel:
+        # Shape becomes (num_pixels, n_samples, C, H, W)
+        grad_grouped = grad.view(num_pixels, n_samples, C, H, W)
+        
+        # Step 1: Compute the L2 norm over the spatial dimensions for each channel.
+        # This yields a tensor of shape (num_pixels, n_samples, C)
+        channel_norms = torch.norm(grad_grouped, p=2, dim=(3, 4))
+        
+        # Step 2: Square the per-channel norms.
+        channel_norms_sq = channel_norms ** 2  # shape: (num_pixels, n_samples, C)
+        
+        # Step 3: Average over the n_samples for each pixel and channel independently.
+        # This results in a tensor of shape (num_pixels, C)
+        per_channel_importance = channel_norms_sq.mean(dim=1)
+        
+        # If 'ent' estimation, normalize by the softmax probability for each perturbation first.
+        if estimation == 'ent':
+            assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
+            # Reshape softmax_prob to (num_pixels, n_samples)
+            softmax_prob_grouped = softmax_prob.view(num_pixels, n_samples)
+            # Divide each squared norm by the corresponding softmax probability.
+            channel_norms_sq_normalized = channel_norms_sq / softmax_prob_grouped.unsqueeze(2)
+            per_channel_importance = channel_norms_sq_normalized.mean(dim=1)
+        
+        # Step 4: Finally, average over the channels (aggregate last) to get a scalar per pixel.
+        final_importance = per_channel_importance.mean(dim=1)  # shape: (num_pixels,)
+        
+        if estimation not in ['var', 'ent']:
+            return final_importance.mean()  # overall scalar average
+        else:
+            return final_importance
+        
 
 
     
