@@ -345,6 +345,10 @@ def load_importance_map_from_csv(H: int, W: int ,csv_path: str) -> np.ndarray:
         print(rows[-1]) 
         last_ucv_iteration = rows[-1][0]
 
+    print("last_idx:", indices[-1])
+    print("last_value:", values[-1])
+     
+
     num_pixels = H * W
     final_map = np.zeros(num_pixels, dtype=np.float32)
     for idx, val in zip(indices, values):
@@ -433,11 +437,13 @@ def generate_importance_map_ucb(
         else:
             _, C, H, W = img_tensor.shape
             sal_map, ucb_iteration = load_importance_map_from_csv(H, W ,csv_path) 
+            print("sal_map.shape:", sal_map.shape)
+            stop
 
             sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
             sal_map_uint8 = (sal_map.detach().cpu().numpy() * 255).astype(np.uint8)
             colored_sal_map = cv.applyColorMap(sal_map_uint8, cv.COLORMAP_JET)
-            alpha = 0.5  # Transparency factor
+            alpha = 0.3  # Transparency factor
             sal_map = cv.addWeighted(img, alpha, colored_sal_map, 1 - alpha, 0)
 
         info_maps[label] = sal_map
@@ -474,13 +480,14 @@ def generate_importance_map_ucb(
 
 def main():
     # Example usage
-    PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
+    #PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
+    PATH = "checkpoints/checkpoint_86epoch_0.9327trainF1_0.9344valF1_4c.pth"
 
     labels = get_model_labels()
     model = load_model(PATH, labels)
 
     reg_params = RegParameters()
-    reg_params.estimation = 'ent'  # e.g. variance-based
+    reg_params.estimation = 'var'  # e.g. variance-based
     reg_params.n_samples = 2
     reg_params.c = 0.25
     # you might also specify reg_params.c, reg_params.n_samples, etc.
@@ -493,13 +500,14 @@ def main():
         model=model,
         labels=labels,
         reg_params=reg_params,
-        ucb_iterations=0,
-        top_percent=0.15,
+        ucb_iterations=2,
+        top_percent=0.7,
         batch_size_for_perturbations=64,
-        n_init=2,
+        n_init=1,
         csv_path="ucb_log.csv",
         calculate=False
     )
+    stop
 
     IMAGE_PATH = "images2explain/Horse_Zebra.png"
 

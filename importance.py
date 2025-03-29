@@ -562,7 +562,7 @@ def get_model_labels() -> List[str]:
     return labels
 
 def load_model(model_path: str, labels: List[str]) -> torch.nn.Module:
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model = AnimalClassifier(num_classes=len(labels))
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
