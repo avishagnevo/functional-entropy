@@ -435,13 +435,11 @@ def generate_importance_map_ucb(
         else:
             _, C, H, W = img_tensor.shape
             sal_map, ucb_iteration = load_importance_map_from_csv(H, W ,csv_path) 
-            print("sal_map.shape:", sal_map.shape)
-            stop
 
-            sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
+            #sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
             sal_map_uint8 = (sal_map.detach().cpu().numpy() * 255).astype(np.uint8)
             colored_sal_map = cv.applyColorMap(sal_map_uint8, cv.COLORMAP_JET)
-            alpha = 0.3  # Transparency factor
+            alpha = 0.7  # Transparency factor
             sal_map = cv.addWeighted(img, alpha, colored_sal_map, 1 - alpha, 0)
 
         info_maps[label] = sal_map
@@ -458,7 +456,8 @@ def generate_importance_map_ucb(
     axes[0].set_title("Original Image")
     axes[0].axis("off")
     for i, (label, info_map) in enumerate(info_maps.items(), start=1):
-        axes[i].imshow(info_map, cmap='twilight_shifted')
+        #axes[i].imshow(info_map, cmap='hot')
+        axes[i].imshow(cv.cvtColor(info_map, cv.COLOR_BGR2RGB)) #
         axes[i].set_title(f"UCB Info Map: {label}")
         axes[i].axis("off")
     plt.tight_layout()
@@ -498,10 +497,10 @@ def main():
         reg_params=reg_params,
         ucb_iterations=0,
         top_percent=0.7,
-        batch_size_for_perturbations=64,
-        n_init=3,
+        batch_size_for_perturbations=24,
+        n_init=10,
         csv_path="ucb_log.csv",
-        calculate=True
+        calculate=False
     )
 
 if __name__ == "__main__":

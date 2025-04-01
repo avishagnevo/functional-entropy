@@ -42,59 +42,6 @@ class Perturbation:
         return pertubated_tens  
 
     @classmethod
-    def add_noise_to_tensor_subset(cls, tens: torch.Tensor, pixels: List[int], n_samples: int, 
-                                    num_channels: int = 3, over_dim: int = 0) -> torch.Tensor:
-        """
-        Adds noise to only a subset of positions (the given pixels, applied to all channels)
-        in a batched tensor. Assumes tens is a flattened tensor of shape (B * n_samples * L, F),
-        where F = num_channels * (H * W) and L = len(pixels).
-        
-        For each original sample, the ordering of tens is assumed to be such that the first n_samples
-        rows correspond to perturbations for pixels[0], the next n_samples for pixels[1], etc.
-        
-        :param tens: tensor of shape (B * n_samples * L, F)
-        :param pixels: list of pixel indices (spatial indices)
-        :param n_samples: number of perturbations per pixel.
-        :param num_channels: number of channels (e.g., 3)
-        :param over_dim: (unused here, kept for compatibility)
-        :return: tens with noise added only at the specified positions.
-        """
-
-        BnL, F = tens.shape
-        HW = F // num_channels
-        L = len(pixels)
-        # Infer original batch size: B = total_rows / (n_samples * L)
-        B = BnL // (n_samples * L)
-        
-        # Create a base mask for each pixel in 'pixels'.
-        # For a given pixel p (a spatial index in [0, H*W)),
-        # we set to 1 the positions p + c * HW for c in 0...num_channels-1.
-        masks = []
-        for p in pixels:
-            mask = torch.zeros(F, device=tens.device, dtype=tens.dtype)
-            for c in range(num_channels):
-                index = p + c * HW
-                mask[index] = 1.0
-            masks.append(mask)
-        # Shape: (L, F)
-        base_mask = torch.stack(masks, dim=0)
-        
-        # For each pixel, repeat its mask n_samples times. This gives a per-sample mask of shape (L*n_samples, F)
-        mask_per_sample = base_mask.repeat_interleave(n_samples, dim=0)  # shape: (L * n_samples, F)
-        
-        # Tile this mask for each original sample in the batch.
-        mask_total = mask_per_sample.repeat(B, 1)  # shape: (B * L * n_samples, F)
-        
-        # Generate noise: here we use tens.std() as a scale.
-        scale = 1  # scalar noise scale tens.std()
-        noise = torch.randn_like(tens) * scale
-        
-        # Only add noise where mask_total is 1.
-        perturbed_tens = tens + noise * mask_total
-
-        return perturbed_tens
-
-    @classmethod
     def _add_noise_to_tensor_subset(cls, tens: torch.Tensor, pixels : List[int] , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
         """
         Adds noise to a tensor sampled from N(0, tens.std()).
@@ -234,47 +181,53 @@ class Perturbation:
 
         return tens        
     
-
-    @classmethod
-    def perturb_tensor_subset(cls, tens: torch.Tensor, pixels: List[int], n_samples: int, perturbation: bool = True) -> torch.Tensor:
+    def perturb_tensor_subset(
+        tens: torch.Tensor,
+        pixels: list[int],
+        n_samples: int,
+        perturbation: bool = True,
+        num_channels: int = 3,
+        over_dim: int = 0
+        ) -> torch.Tensor:
         """
-        Flattens the tensor, expands it to have n_samples * len(pixels) copies per original sample,
-        and perturbs (adds noise to) only the specified pixels in parallel.
-        
-        :param tens: input tensor of shape (batch, channels, H, W)
-        :param pixels: list of pixel indices (spatial indices in range [0, H*W))
-        :param n_samples: number of perturbations per pixel.
-        :param perturbation: if False, only duplicates the tensor.
-        :return: tensor of shape (batch * n_samples * len(pixels), channels, H, W) with perturbations.
+        :param tens: shape (B, C, H, W) float
+        :param pixels: list of pixel indices in [0..(H*W)-1]
+        :param n_samples: replicate factor (per pixel)
+        :param perturbation: if True, add random noise
+        :param num_channels: normally equals C
+        :param over_dim: not used for scale, only for shape if needed
+        :return: shape (len(pixels)*B*n_samples, C, H, W)
         """
-        """
-        tens = torch.zeros_like(tens.clone())
-        pixel=pixels[0]
-        ones = torch.ones_like(tens[:,:,pixel,pixel].clone())
-        tens[:,:,pixel,pixel] = ones
-        print('tens.shape', tens.shape) 
-        """
-
         B, C, H, W = tens.shape
         F = C * H * W
-        max_pixel = H * W
-        for pixel in pixels:
-            assert pixel < max_pixel, f"Pixel index {pixel} is out of range 0:{max_pixel}"
-        
-        # Flatten tens to shape (B, F)
-        tens_flat = tens.contiguous().view(B, -1)
-        total_repeats = n_samples * len(pixels)
-        # Repeat each sample total_repeats times along the batch dimension.
-        tens_expanded = tens_flat.repeat_interleave(total_repeats, dim=0)  # shape: (B * total_repeats, F)
-        
-        if perturbation:
-            tens_expanded = cls.add_noise_to_tensor_subset(tens_expanded, pixels, n_samples, num_channels=C)
-        
-        # Reshape back to (B * total_repeats, C, H, W)
-        tens_out = tens_expanded.view(B * total_repeats, C, H, W)
-        tens_out.requires_grad_()
 
-        return tens_out
+        base_flat = tens.view(B, F)
+
+        all_noisy = []
+        base_mask = base_flat.new_zeros(F)
+        jump = F // num_channels
+
+        for pix in pixels:
+            flat = base_flat.repeat(1, n_samples)
+
+            flat = flat.view(B*n_samples, F)
+
+            if perturbation:
+                mask = base_mask.clone()
+
+                for c_idx in range(num_channels):
+                    idx = pix + c_idx * jump
+                    mask[idx] = 1.0
+
+                noise = torch.randn_like(flat) * mask
+                flat = flat + noise
+
+            out = flat.view(B*n_samples, C, H, W)
+            all_noisy.append(out)
+
+        # cat => (len(pixels)*B*n_samples, C, H, W)
+        pertube_tens = torch.cat(all_noisy, dim=0)
+        return pertube_tens
 
     @classmethod
     def get_expanded_logits(cls, logits: torch.Tensor, n_samples: int, logits_flg: bool = True) -> torch.Tensor:
@@ -399,10 +352,9 @@ class Regularization(object):
             return mean_sq_norm_normalized  # per-pixel vector of mean squared norms
         else:
             # Mean over all
+            stop
             mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)   v
             return mean_sq_norm.mean()  # overall scalar average
-
-    
     
     @classmethod
     def _get_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, 

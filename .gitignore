@@ -52,3 +52,6 @@ vargrad_15/*
 vargrad_4.0/*
 vargrad_maps/*
 images2explain/*
+vargrad_sal_maps/*
+__pycache__/*
+.DS_Store

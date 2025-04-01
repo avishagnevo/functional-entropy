@@ -18,122 +18,10 @@ import gc
 import time
 import torch
 import torch.nn.functional as F
-
 #from functorch import vmap, grad
 
 # Automatically set the device (GPU if available, else CPU)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
-# approx_importance.py
-
-import torch
-import torch.nn.functional as F
-import functorch
-from importance import *  # import existing functions if needed
-
-def compute_per_sample_gradient_approx(model: torch.nn.Module, original_image: torch.Tensor, 
-                                       perturbed_images: torch.Tensor, label_idx: int) -> torch.Tensor:
-    """
-    Approximates the gradient of the softmax probability for a specified label with respect to each 
-    perturbed image, using a first-order Taylor expansion. The perturbed images are assumed to be of the form:
-        x_perturbed = original_image + δ
-    where δ is small and nonzero only at the targeted pixel(s).
-    
-    The approximation is:
-        grad f(x + δ) ≈ grad f(x) + H(x)·δ
-    where H(x)·δ is computed efficiently using functorch.jvp.
-
-    :param model: The neural network model.
-    :param original_image: The unperturbed image tensor of shape (C, H, W) with requires_grad=True.
-    :param perturbed_images: A batch of perturbed images of shape (B, C, H, W). These should be produced 
-                             by adding small noise only at the pixels of interest.
-    :param label_idx: The index of the label for which to compute the gradient.
-    :return: A tensor of shape (B, C, H, W) with the approximated gradient for each perturbed image.
-    """
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()  # ensure all GPU work is done before timing
-    
-    start = time.perf_counter()
-    # Define f on a single image: returns the softmax probability for the given label.
-    def f(x: torch.Tensor) -> torch.Tensor:
-        out = model(x.unsqueeze(0))              # shape: (1, num_classes)
-        out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
-        return out_sm[0, label_idx]                # scalar
-
-    # Compute the gradient at the original image (g_orig).
-    grad_f = functorch.grad(f)
-    g_orig = grad_f(original_image)  # shape: (C, H, W)
-
-    # For each perturbed image, compute δ = (x_perturbed - original_image).
-    # original_image has shape (C, H, W); we unsqueeze to (1, C, H, W) to broadcast.
-    delta = perturbed_images - original_image.unsqueeze(0)  # shape: (B, C, H, W)
-
-    # Define a helper that computes the Hessian-vector product (H(x)·δ) for a single δ.
-    def hvp(delta_single: torch.Tensor) -> torch.Tensor:
-        # functorch.jvp computes (f(x), directional derivative of f at x in direction δ)
-        # Here we compute it for grad_f, so that the directional derivative equals H(x)·δ.
-        _, jvp_val = functorch.jvp(grad_f, (original_image,), (delta_single,))
-        return jvp_val  # shape: (C, H, W)
-    
-    # Vectorize the hvp function over the batch dimension.
-    vectorized_hvp = functorch.vmap(hvp)
-
-    end = time.perf_counter()
-    print(f"1st Computation took {end - start:.4f} seconds")
-    
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()  # ensure all GPU work is done before timing
-    
-    start = time.perf_counter()
-
-
-    # Vectorize hvp over the batch dimension.
-    approx_hvp = vectorized_hvp(delta)  # shape: (B, C, H, W)
-
-    # The approximated gradient for each perturbed image:
-    approx_grad = g_orig.unsqueeze(0) + approx_hvp  # shape: (B, C, H, W)
-    
-    end = time.perf_counter()
-    print(f"2nd Computation took {end - start:.4f} seconds")
-    
-    return approx_grad
-
-# You might then override your original compute_per_sample_gradient with the approximate version.
-# For example, if you want to switch based on a flag, you could do:
-
-def _compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int, 
-                                approx: bool = True) -> torch.Tensor:
-    """
-    Computes the gradient of the softmax probability for a specified label with respect to each input image.
-    
-    If approx==True, it uses a first-order Taylor expansion to approximate the gradient for each perturbed image
-    by reusing the gradient computed at the original image.
-    
-    :param model: The neural network model.
-    :param images: A batch of perturbed images of shape (B, C, H, W). Must have requires_grad=True.
-    :param label_idx: The index of the label for which to compute the gradient.
-    :param approx: Whether to use the approximation.
-    :return: A tensor of shape (B, C, H, W) with the gradient for each image.
-    """
-    # If no approximation, fall back on the original method.
-    if not approx:
-        if not torch.cuda.is_available():
-            grad_f = torch.func.grad(lambda x: F.softmax(model(x.unsqueeze(0)), dim=1)[0, label_idx])
-            return torch.vmap(grad_f)(images)
-        else:
-            grad_f = functorch.grad(lambda x: F.softmax(model(x.unsqueeze(0)), dim=1)[0, label_idx])
-            return functorch.vmap(grad_f)(images)
-    
-    # Otherwise, assume that all perturbed images in 'images' were generated from the same original image.
-    # Here, we extract the original image from the first sample.
-    original_image = images[0].detach()
-    # Compute approximate gradients.
-    per_sample_grad = compute_per_sample_gradient_approx(model, original_image, images, label_idx)
-    
-    return per_sample_grad
 
 
 def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
@@ -172,6 +60,7 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     
     return per_sample_grad
 
+
 def compute_softmax_prob(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
     """
     Computes the softmax probability for a specified label for each input image.
@@ -201,12 +90,11 @@ def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str =
     :param softmax_prob: The softmax probability for the specified label for each input image.
     :return: A scalar importance measure.
     """
-    importance = Regularization.get_importance_by_estimation_c(gradients, n_samples, estimation, softmax_prob)
+    #importance = Regularization.get_importance_by_estimation_c(gradients, n_samples, estimation, softmax_prob)
     #print("importance_c:", importance)
     #importance = Regularization._get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
     #print("importance_*:", importance)
-    #importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
-    #print("importance:", importance)
+    importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
     importance = importance.detach().clone()  # Ensure no graph connection
     
     return importance
@@ -601,9 +489,6 @@ def load_model(model_path: str, labels: List[str]) -> torch.nn.Module:
     
     return model    
 
-# =============================================================================
-# Main Block
-# =============================================================================
 def main():
     PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
 

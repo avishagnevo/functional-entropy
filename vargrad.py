@@ -201,27 +201,11 @@ def generate_importance_map_vargrad(
             print(f"Label '{label}' not found in the provided labels list.")
             continue
 
-        # Use the input itself as the baseline (alternatively, you might use zeros)
-        baseline = img_tensor
-        
-        '''
-        #ig = IntegratedGradients(model)
-        #nt = NoiseTunnel(ig)
-        attributions, _ = nt.attribute(
-            img_tensor,
-            nt_type='vargrad',
-            stdevs=stdevs,
-            nt_samples=nt_samples,
-            baselines=baseline,
-            target=label_idx,
-            return_convergence_delta=True
-        )
-        '''
         saliency = Saliency(model)
         nt = NoiseTunnel(saliency)
         attributions= nt.attribute(
             img_tensor,
-            nt_type='smoothgrad_sq',
+            nt_type='vargrad',
             stdevs=stdevs,
             nt_samples=nt_samples,
             target=label_idx
@@ -229,7 +213,8 @@ def generate_importance_map_vargrad(
         
         # 4) Process attributions: average over channels and normalize.
         attr_map = attributions.detach().cpu().numpy()[0]  # shape: (C, H, W)
-        attr_map = np.mean(attr_map, axis=0)                # shape: (H, W)
+        #attr_map = np.mean(attr_map, axis=0)                # shape: (H, W)
+        attr_map = np.linalg.norm(attr_map, axis=0) 
         attr_map = (attr_map - attr_map.min()) / (attr_map.max() - attr_map.min() + 1e-8)
         attr_map_uint8 = (attr_map * 255).astype(np.uint8)
         colored_attr_map = cv.applyColorMap(attr_map_uint8, cv.COLORMAP_JET)
@@ -284,7 +269,7 @@ def main():
         image_path=IMAGE_PATH,
         model=model,
         labels=labels,
-        nt_samples=20,
+        nt_samples=10,
         stdevs=1.0
     )
 
