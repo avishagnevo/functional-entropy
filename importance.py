@@ -34,16 +34,12 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     :param label_idx: The index of the label for which to compute the gradient.
     :return: A tensor of shape (B, C, H, W) with the gradient for each image.
     """
-    #if torch.cuda.is_available():
-    #    torch.cuda.synchronize()  # ensure all GPU work is done before timing
-    
-    #start = time.perf_counter()
-
     def f(x: torch.Tensor) -> torch.Tensor:
         # x has shape (C, H, W); add batch dimension
         out = model(x.unsqueeze(0))              # shape: (1, num_classes)
         out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
-        return out_sm[0, label_idx]                # return the probability for the specified label
+        probab = out_sm[0, label_idx]                # shape: (1,)
+        return probab              # return the probability for the specified label
 
     if not torch.cuda.is_available():
         grad_f = torch.func.grad(f)
@@ -51,13 +47,7 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     else:
         grad_f = functorch.grad(f)
         per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)
-    
-    #if torch.cuda.is_available():
-    #    torch.cuda.synchronize()  # wait for GPU work to finish
-    
-    #end = time.perf_counter()
-    #print(f"Batch size {images.shape[0]}: Computation took {end - start:.4f} seconds")
-    
+
     return per_sample_grad
 
 
@@ -233,8 +223,8 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     :return: A scalar importance measure for the pixel subset.
     """
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
-    per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
     pertub_images.requires_grad_(True)
+    per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
     softmax_prob = None
     
     if reg_params.estimation != 'var':
@@ -242,8 +232,8 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
 
     importance = compute_importance(per_sample_grad, reg_params.n_samples, estimation=reg_params.estimation, softmax_prob=softmax_prob)
 
-    pertub_images = pertub_images.detach()#.clone()  # Stop tracking grads to avoid OOM
-    per_sample_grad = per_sample_grad.detach()#.clone()
+    pertub_images = pertub_images.detach().clone()  # Stop tracking grads to avoid OOM
+    per_sample_grad = per_sample_grad.detach().clone()
 
     del pertub_images, per_sample_grad  # Delete the intermediate tensors to free up memory
     return importance

@@ -436,10 +436,10 @@ def generate_importance_map_ucb(
             _, C, H, W = img_tensor.shape
             sal_map, ucb_iteration = load_importance_map_from_csv(H, W ,csv_path) 
 
-            #sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
+            sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
             sal_map_uint8 = (sal_map.detach().cpu().numpy() * 255).astype(np.uint8)
             colored_sal_map = cv.applyColorMap(sal_map_uint8, cv.COLORMAP_JET)
-            alpha = 0.7  # Transparency factor
+            alpha = 0.5  # Transparency factor
             sal_map = cv.addWeighted(img, alpha, colored_sal_map, 1 - alpha, 0)
 
         info_maps[label] = sal_map
@@ -497,11 +497,13 @@ def main():
         reg_params=reg_params,
         ucb_iterations=0,
         top_percent=0.7,
-        batch_size_for_perturbations=24,
-        n_init=10,
+        batch_size_for_perturbations=64,
+        n_init=2,
         csv_path="ucb_log.csv",
         calculate=False
     )
+
+    
 
 if __name__ == "__main__":
     main()

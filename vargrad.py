@@ -8,12 +8,10 @@ from torchvision import transforms
 from PIL import Image
 from captum.attr import IntegratedGradients, NoiseTunnel
 from importance import prepare_image, get_model_labels, load_model, get_labels
-import os
-import cv2 as cv
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
 from captum.attr import IntegratedGradients, NoiseTunnel, Saliency
+from typing import Dict, List, Tuple
+
+
 
 
 def generate_importance_map_vargrad_overlay(
@@ -167,6 +165,95 @@ def _generate_importance_map_vargrad(
     return colored_attr_map
 
 
+def get_top_influential_flat_indexes(
+    attr_tensors: Dict[str, torch.Tensor],
+    top_k: int = 10
+) -> Dict[str, List[int]]:
+    """
+    Collects the top-k pixel indices (in a flattened [H*W] array) from each single-channel
+    attribution map, returning a dictionary where:
+      - Key = label
+      - Value = list of flattened indices (no attribution values).
+
+    :param attr_tensors: Dict of { label: single-channel tensor [1, H, W] }.
+    :param top_k: Number of top influential pixels to retrieve for each label.
+    :return: { label: [ flat_index_1, flat_index_2, ..., flat_index_top_k ] }.
+    """
+    top_indices_dict = {}
+
+    for label, tensor in attr_tensors.items():
+        # Ensure it's single-channel: [1, H, W]
+        if tensor.dim() != 3 or tensor.size(0) != 1:
+            print(f"Skipping '{label}': Expected shape [1, H, W], got {tensor.shape}.")
+            continue
+        
+        # Squeeze out the channel dimension => shape: [H, W]
+        attribution_map = tensor[0]  # shape: [H, W]
+        # Flatten => shape: [H*W]
+        flat_map = attribution_map.view(-1)
+        
+        # Get the indices of the top-k values
+        _, top_indices = torch.topk(flat_map, k=top_k)
+        
+        # Convert top_indices from tensor to Python int list
+        top_indices_list = sorted([int(idx.item()) for idx in top_indices], reverse=True)
+        
+        # Store in the result dictionary
+        top_indices_dict[label] = top_indices_list
+
+    return top_indices_dict
+
+
+
+
+def load_attr_maps_to_tensors(
+    attr_maps_dir: str,
+    image_size: tuple = None,
+    device: torch.device = torch.device('cpu')
+) -> Dict[str, torch.Tensor]:
+    """
+    Reads single-channel (grayscale) VarGrad attribution map images from a directory 
+    and loads them into PyTorch tensors (shape: [1, H, W], values in [0,1]).
+    
+    :param attr_maps_dir: Path to the directory containing attribution map images.
+    :param image_size: Optional resize dimensions (width, height). If None, keeps original size.
+    :param device: Device to load tensors on (default is CPU).
+    :return: Dictionary mapping labels (derived from filenames) to PyTorch tensors.
+    """
+    attr_map_tensors = {}
+    
+    # Transform for single-channel images: 
+    #   - Reads a [H,W] numpy array 
+    #   - Converts it to a torch tensor in [1, H, W], scaled to [0,1].
+    transform_pipeline = transforms.Compose([
+        transforms.ToTensor()
+    ])
+    
+    for filename in os.listdir(attr_maps_dir):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            # Example: If files are named "giraffe_vargrad.png", we'll remove "_vargrad"
+            label = os.path.splitext(filename)[0].replace("_vargrad", "")
+            file_path = os.path.join(attr_maps_dir, filename)
+            
+            # 1) Load image in single-channel (grayscale)
+            img = cv.imread(file_path, cv.IMREAD_GRAYSCALE)
+            if img is None:
+                print(f"Warning: Failed to load image {file_path}. Skipping.")
+                continue
+            
+            # 2) Resize if required
+            if image_size:
+                img = cv.resize(img, image_size)
+            
+            # 3) Convert to a [1, H, W] tensor and move to device
+            tensor_img = transform_pipeline(img).to(device)  # shape = [1, H, W]
+            
+            attr_map_tensors[label] = tensor_img
+            
+    return attr_map_tensors
+
+
+
 def generate_importance_map_vargrad(
     image_path: str,
     model: torch.nn.Module,
@@ -174,26 +261,20 @@ def generate_importance_map_vargrad(
     nt_samples: int = 20,
     stdevs: float = 0.02
 ) -> None:
-    """
-    Computes vargrad-based attributions for each ground-truth label found in the image filename
-    and plots a grid of subplots showing the original image alongside the vargrad overlays.
-    
-    :param image_path: Path to the image file.
-    :param model: The model (in eval mode) for which to compute attributions.
-    :param labels: List of valid class labels.
-    :param nt_samples: Number of noisy samples for vargrad.
-    :param stdevs: Standard deviation for the Gaussian noise added.
-    """
-    # 1) Load & preprocess the image.
-    # Assume prepare_image returns the original image (BGR format) and a preprocessed tensor.
+    # 1) Load & preprocess the image (assuming your prepare_image function returns a BGR image + tensor)
     orig_img, img_tensor = prepare_image(image_path)
     img_tensor.requires_grad_(True)
-    
-    # 2) Parse ground-truth labels from the filename.
-    gt_labels = get_labels(image_path)  # e.g., returns ['Giraffe', 'Lion']
-    
+
+    # 2) Parse ground-truth labels from the filename
+    gt_labels = get_labels(image_path)
+
+    # Create dictionaries to store both:
+    #  a) Single-channel (raw) grayscale maps
+    #  b) Color-overlaid images
+    raw_grayscale_maps = {}
     info_maps = {}
-    # 3) For each label, compute vargrad overlay using IntegratedGradients wrapped in NoiseTunnel.
+
+    # 3) For each ground-truth label, compute vargrad overlay
     for label in gt_labels:
         try:
             label_idx = labels.index(label)
@@ -201,55 +282,72 @@ def generate_importance_map_vargrad(
             print(f"Label '{label}' not found in the provided labels list.")
             continue
 
+        # Compute attributions
         saliency = Saliency(model)
         nt = NoiseTunnel(saliency)
-        attributions= nt.attribute(
+        attributions = nt.attribute(
             img_tensor,
             nt_type='vargrad',
             stdevs=stdevs,
             nt_samples=nt_samples,
             target=label_idx
         )
-        
-        # 4) Process attributions: average over channels and normalize.
-        attr_map = attributions.detach().cpu().numpy()[0]  # shape: (C, H, W)
-        #attr_map = np.mean(attr_map, axis=0)                # shape: (H, W)
-        attr_map = np.linalg.norm(attr_map, axis=0) 
+
+        # Convert to numpy and combine channels (L2 norm) -> shape: (H, W)
+        attr_map = attributions.detach().cpu().numpy()[0]
+        attr_map = np.linalg.norm(attr_map, axis=0)
+
+        # Normalize to [0,1] range
         attr_map = (attr_map - attr_map.min()) / (attr_map.max() - attr_map.min() + 1e-8)
+
+        # Convert to single-channel 8-bit grayscale for saving
         attr_map_uint8 = (attr_map * 255).astype(np.uint8)
+        raw_grayscale_maps[label] = attr_map_uint8
+
+        # (Optionally) create a color heatmap for visualization
         colored_attr_map = cv.applyColorMap(attr_map_uint8, cv.COLORMAP_JET)
         colored_attr_map = cv.resize(colored_attr_map, (orig_img.shape[1], orig_img.shape[0]))
-        
-        # 5) Overlay the heatmap on the original image.
+
+        # Overlay color heatmap on the original BGR image
         overlay = cv.addWeighted(orig_img, 0.3, colored_attr_map, 0.7, 0)
         info_maps[label] = overlay
 
-    # 6) Plot the results: original image plus one overlay per label.
+    # 4) Save individual single-channel (grayscale) attribution maps for each label
+    single_channel_dir = "individual_vargrad_maps_grayscale"
+    os.makedirs(single_channel_dir, exist_ok=True)
+
+    for label, grayscale_map in raw_grayscale_maps.items():
+        # Directly save single-channel map as .png
+        save_path = os.path.join(single_channel_dir, f"{label}.png")
+        cv.imwrite(save_path, grayscale_map)
+        print(f"Single-channel raw attribution map for {label} saved at {save_path}")
+
+    # 6) Optionally, display the original + overlays
     num_plots = len(info_maps) + 1
     fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
     
-    # Plot original image.
-    #axes[0].imshow(cv.cvtColor(orig_img, cv.COLOR_BGR2RGB))
+    # Show original
     axes[0].imshow(orig_img)
     axes[0].set_title("Original Image")
     axes[0].axis("off")
-    
-    # Plot each vargrad overlay.
+
+    # Show each overlay
     for i, (label, overlay) in enumerate(info_maps.items(), start=1):
         axes[i].imshow(cv.cvtColor(overlay, cv.COLOR_BGR2RGB))
         axes[i].set_title(f"VarGrad Map: {label}")
         axes[i].axis("off")
-    
+
     plt.tight_layout()
     
-    # 7) Save the figure.
+    # 7) Save the combined figure if desired
     save_dir = "vargrad_sal_maps"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, "vargrad_info_map.png")
     fig.savefig(save_path)
-    print(f"VarGrad-based information map saved to {save_path}")
-    plt.show()
+    print(f"Composite VarGrad-based information map saved to {save_path}")
+    #plt.show()
+
+
 
 # Example main usage:
 def main():
@@ -269,9 +367,25 @@ def main():
         image_path=IMAGE_PATH,
         model=model,
         labels=labels,
-        nt_samples=10,
+        nt_samples=20,
         stdevs=1.0
     )
+
+    attr_maps_dir = "individual_vargrad_maps_grayscale"
+    device = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
+
+    attr_tensors = load_attr_maps_to_tensors(attr_maps_dir, image_size=(224, 224), device=device)
+
+    for label, tensor in attr_tensors.items():
+        print(f"{label}: shape={tensor.shape}, device={tensor.device}")
+
+    top_indices_dict = get_top_influential_flat_indexes(attr_tensors, top_k=20)
+
+    for label, index_list in top_indices_dict.items():
+        print(f"\nLabel: {label}")
+        print("Flattened Indices:", index_list)
+
+    
 
 
 if __name__ == "__main__":

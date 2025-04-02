@@ -201,7 +201,7 @@ class Perturbation:
         B, C, H, W = tens.shape
         F = C * H * W
 
-        base_flat = tens.view(B, F)
+        base_flat = tens.reshape(B, F)
 
         all_noisy = []
         base_mask = base_flat.new_zeros(F)
