@@ -9,6 +9,8 @@ import cv2 as cv
 import os
 import gc
 import matplotlib.pyplot as plt
+from torchvision.io import read_image
+from torchvision.models import resnet50, ResNet50_Weights
 
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
@@ -396,6 +398,8 @@ def generate_importance_map_ucb(
     # 3) For each ground-truth label in the filename, do the UCB approach
     info_maps = {}
     for label in gt_labels:
+        #if label == gt_labels[1]:
+        #    continue
         try:
             label_idx = labels.index(label)
         except ValueError:
@@ -439,7 +443,7 @@ def generate_importance_map_ucb(
             sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
             sal_map_uint8 = (sal_map.detach().cpu().numpy() * 255).astype(np.uint8)
             colored_sal_map = cv.applyColorMap(sal_map_uint8, cv.COLORMAP_JET)
-            alpha = 0.5  # Transparency factor
+            alpha = 0.3  # Transparency factor
             sal_map = cv.addWeighted(img, alpha, colored_sal_map, 1 - alpha, 0)
 
         info_maps[label] = sal_map
@@ -461,7 +465,7 @@ def generate_importance_map_ucb(
         axes[i].set_title(f"UCB Info Map: {label}")
         axes[i].axis("off")
     plt.tight_layout()
-    #plt.show()
+    plt.show()
 
     save_dir = save_dir.split('/')[0] + '/'
     info_map_path = f"{save_dir}ucb_info_map.png"
@@ -476,19 +480,28 @@ def generate_importance_map_ucb(
 
 
 def main():
-    # Example usage
-    #PATH = f"checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
-    PATH = "checkpoints/checkpoint_86epoch_0.9327trainF1_0.9344valF1_4c.pth"
+    #PATH = "checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
+    #PATH = "checkpoints/checkpoint_47epoch_0.9576acc_0.9529valacc_4c.pth"
+    #PATH = "checkpoints/checkpoint_86epoch_0.9327trainF1_0.9344valF1_4c.pth"
+    #labels = get_model_labels()  
+    #model = load_model(PATH, labels) 
 
-    labels = get_model_labels()
-    model = load_model(PATH, labels)
+    #IMAGE_PATH = "images2explain/Horse_Zebra.png"
+    #IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
+    #IMAGE_PATH = "images2explain/Zebra_Lion.png"
+    #IMAGE_PATH = "images2explain/Lion_Horse.png"
+    IMAGE_PATH = "images2explain/bull mastiff_tabby.png"
+
+    weights = ResNet50_Weights.DEFAULT
+    labels = weights.meta["categories"]
+    model = resnet50(weights=weights)
+    model.eval()
+    model.to(device)
 
     reg_params = RegParameters()
     reg_params.estimation = 'var'  # e.g. variance-based
     reg_params.n_samples = 2
     reg_params.c = 0.25
-
-    IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
 
     generate_importance_map_ucb(
         image_path=IMAGE_PATH,
@@ -497,13 +510,11 @@ def main():
         reg_params=reg_params,
         ucb_iterations=0,
         top_percent=0.7,
-        batch_size_for_perturbations=64,
+        batch_size_for_perturbations=4,
         n_init=2,
         csv_path="ucb_log.csv",
-        calculate=False
+        calculate=True
     )
-
-    
 
 if __name__ == "__main__":
     main()

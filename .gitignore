@@ -47,6 +47,8 @@ pixel_info_*
 pixels_info/*
 Giraffe_Lion/*
 Horse_Zebra/*
+Giraffe_Lion_old/*
+Horse_Zebra_old/*
 vargrad/*
 vargrad_15/*
 vargrad_4.0/*
@@ -57,3 +59,8 @@ __pycache__/*
 .DS_Store
 individual_vargrad_maps_grayscale/*
 individual_vargrad_maps/*
+resnet50.ipynb
+grad_test.ipynb
+*.pyc
+bull mastiff_tabby/*
+__pycache__/*

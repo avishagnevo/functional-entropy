@@ -201,6 +201,8 @@ class Perturbation:
         B, C, H, W = tens.shape
         F = C * H * W
 
+        tens.requires_grad = False
+
         base_flat = tens.reshape(B, F)
 
         all_noisy = []
@@ -219,8 +221,11 @@ class Perturbation:
                     idx = pix + c_idx * jump
                     mask[idx] = 1.0
 
+                torch.manual_seed(0)
                 noise = torch.randn_like(flat) * mask
+                #noise = torch.normal(0.0,1.0, (1,1)).to(mask.device) * mask
                 flat = flat + noise
+                #flat = torch.clamp(flat, min=0.0, max=1.0) #why is tens values not between -1 and 1
 
             out = flat.view(B*n_samples, C, H, W)
             all_noisy.append(out)
@@ -337,6 +342,12 @@ class Regularization(object):
         
         # Compute the squared L2 norm for each sample in the group; result shape: (num_pixels, n_samples)
         group_norms_sq = torch.norm(grad_grouped, p=2, dim=(2, 3, 4)) ** 2
+        ##
+        #group_sum_sq = grad_grouped.sum(dim=(2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = (grad_grouped**2).sum(dim=(2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = grad_grouped.sum(dim=(1,2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = (grad_grouped**2).sum(dim=(1,2,3,4))  # shape: (num_pixels,n_samples)
+        ##
         
         if estimation == 'var':
             # Mean over the perturbations' squared norms

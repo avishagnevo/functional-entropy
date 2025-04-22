@@ -16,18 +16,18 @@ import functorch
 import psutil
 import gc
 import time
-import torch
-import torch.nn.functional as F
+from torch.func import jvp, vmap
+
 #from functorch import vmap, grad
 
 # Automatically set the device (GPU if available, else CPU)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 
 def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
     """
     Computes the gradient of the softmax probability for a specified label with respect 
-    to each input image and prints the computation time.
+    to each input image.
     
     :param model: The neural network model.
     :param images: A batch of images of shape (B, C, H, W). Must have requires_grad=True.
@@ -37,8 +37,9 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     def f(x: torch.Tensor) -> torch.Tensor:
         # x has shape (C, H, W); add batch dimension
         out = model(x.unsqueeze(0))              # shape: (1, num_classes)
-        out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
-        probab = out_sm[0, label_idx]                # shape: (1,)
+        #out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
+        #probab = out_sm[0, label_idx]                # shape: (1,)
+        probab = out[0, label_idx]                # shape: (1,)
         return probab              # return the probability for the specified label
 
     if not torch.cuda.is_available():
@@ -49,6 +50,72 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
         per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)
 
     return per_sample_grad
+
+
+def compute_per_pixel_gradient(
+    model: torch.nn.Module,
+    images: torch.Tensor,
+    label_idx: int,
+    pixels: list[int],
+    n_samples: int
+) -> torch.Tensor:
+    """
+    Computes the gradient of the softmax probability for a specific class w.r.t.
+    the pixel (all channels) that was perturbed in each input image.
+
+    :param model: A neural network.
+    :param images: (B * n_samples * len(pixels), C, H, W) – already perturbed.
+    :param label_idx: Class index for softmax gradient.
+    :param pixels: List of flattened pixel indices (H * W).
+    :param n_samples: Number of perturbations per pixel.
+    :return: (B_total, C, 1, 1) – gradient for each perturbed pixel across channels.
+    """
+    def f(x: torch.Tensor) -> torch.Tensor:
+        out = model(x.unsqueeze(0))              # shape: (1, num_classes)
+        out_sm = F.softmax(out, dim=1)           # shape: (1, num_classes)
+        probab = out_sm[0, label_idx]            # scalar
+        #probab = out[0, label_idx]
+        return probab
+
+    if not torch.cuda.is_available():
+        #grad_f = torch.func.grad(f)
+        #grads = torch.vmap(grad_f)(images)       # shape: (B_total, C, H, W)
+
+        ###
+        with torch.autograd.set_grad_enabled(True):
+            # runs forward pass
+            outputs = compute_softmax_prob(model, images, label_idx)
+            assert outputs[0].numel() == 1, (
+            "Target not provided when necessary, cannot"
+            " take gradient with respect to multiple outputs."
+            )
+            # torch.unbind(forward_out) is a list of scalar tensor tuples and
+            # contains batch_size * #steps elements
+            grads = torch.autograd.grad(torch.unbind(outputs), images)[0]
+        ###    
+    else:
+        grad_f = functorch.grad(f)
+        grads = functorch.vmap(grad_f)(images)
+
+    B_total, C, H, W = grads.shape
+    B_per_pixel = B_total // (n_samples * len(pixels))
+    assert B_total == len(pixels) * B_per_pixel * n_samples, "Mismatch in batch size and pixels."
+
+    # Repeat each pixel (B * n_samples) times to align with image ordering
+    pixel_indices = []
+    for pix in pixels:
+        pixel_indices.extend([pix] * (B_per_pixel * n_samples))
+
+    # Map each pixel index to (h, w)
+    hw_coords = [(p // W, p % W) for p in pixel_indices]
+
+    # Extract gradient at the right (h, w) for each image
+    selected = torch.stack([
+        grads[i, :, h, w] for i, (h, w) in enumerate(hw_coords)
+    ])  # (B_total, C)
+
+    return selected.unsqueeze(-1).unsqueeze(-1)  # (B_total, C, 1, 1)
+
 
 
 def compute_softmax_prob(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
@@ -80,10 +147,6 @@ def compute_importance(gradients: torch.Tensor,n_samples: int ,estimation: str =
     :param softmax_prob: The softmax probability for the specified label for each input image.
     :return: A scalar importance measure.
     """
-    #importance = Regularization.get_importance_by_estimation_c(gradients, n_samples, estimation, softmax_prob)
-    #print("importance_c:", importance)
-    #importance = Regularization._get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
-    #print("importance_*:", importance)
     importance = Regularization.get_importance_by_estimation(gradients, n_samples, estimation, softmax_prob)
     importance = importance.detach().clone()  # Ensure no graph connection
     
@@ -224,7 +287,8 @@ def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: li
     """
     pertub_images = Perturbation.perturb_tensor_subset(images, pixels, reg_params.n_samples)
     pertub_images.requires_grad_(True)
-    per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
+    #per_sample_grad = compute_per_sample_gradient(model, pertub_images, label_idx)
+    per_sample_grad = compute_per_pixel_gradient(model, pertub_images, label_idx, pixels, reg_params.n_samples)
     softmax_prob = None
     
     if reg_params.estimation != 'var':

@@ -10,8 +10,8 @@ from captum.attr import IntegratedGradients, NoiseTunnel
 from importance import prepare_image, get_model_labels, load_model, get_labels
 from captum.attr import IntegratedGradients, NoiseTunnel, Saliency
 from typing import Dict, List, Tuple
-
-
+from torchvision.io import read_image
+from torchvision.models import resnet50, ResNet50_Weights
 
 
 def generate_importance_map_vargrad_overlay(
@@ -287,7 +287,7 @@ def generate_importance_map_vargrad(
         nt = NoiseTunnel(saliency)
         attributions = nt.attribute(
             img_tensor,
-            nt_type='vargrad',
+            nt_type='smoothgrad_sq',
             stdevs=stdevs,
             nt_samples=nt_samples,
             target=label_idx
@@ -295,6 +295,12 @@ def generate_importance_map_vargrad(
 
         # Convert to numpy and combine channels (L2 norm) -> shape: (H, W)
         attr_map = attributions.detach().cpu().numpy()[0]
+        per_chunnel_mean = np.mean(attr_map, axis=0)
+        print(per_chunnel_mean)
+        # Write per_channel_mean to a file
+        with open("per_channel_mean.txt", "w") as f:
+            f.write("Per-channel mean values:\n")
+            f.write("\n".join(map(str, per_chunnel_mean)))
         attr_map = np.linalg.norm(attr_map, axis=0)
 
         # Normalize to [0,1] range
@@ -345,23 +351,31 @@ def generate_importance_map_vargrad(
     save_path = os.path.join(save_dir, "vargrad_info_map.png")
     fig.savefig(save_path)
     print(f"Composite VarGrad-based information map saved to {save_path}")
-    #plt.show()
+    plt.show()
 
 
 
 # Example main usage:
 def main():
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
     #PATH = "checkpoints/checkpoint_59epoch_0.9599acc_0.9446valacc_18c.pth"
     #PATH = "checkpoints/checkpoint_47epoch_0.9576acc_0.9529valacc_4c.pth"
-    PATH = "checkpoints/checkpoint_86epoch_0.9327trainF1_0.9344valF1_4c.pth"
+    #PATH = "checkpoints/checkpoint_86epoch_0.9327trainF1_0.9344valF1_4c.pth"
+    #labels = get_model_labels()  
+    #model = load_model(PATH, labels) 
 
     #IMAGE_PATH = "images2explain/Horse_Zebra.png"
-    IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
+    #IMAGE_PATH = "images2explain/Giraffe_Lion.png" 
     #IMAGE_PATH = "images2explain/Zebra_Lion.png"
     #IMAGE_PATH = "images2explain/Lion_Horse.png"
-    
-    labels = get_model_labels()  
-    model = load_model(PATH, labels) 
+    IMAGE_PATH = "images2explain/bull mastiff_tabby.png"
+
+    weights = ResNet50_Weights.DEFAULT
+    labels = weights.meta["categories"]
+    model = resnet50(weights=weights)
+    model.to(device)
+    model.eval()
     
     generate_importance_map_vargrad(
         image_path=IMAGE_PATH,
@@ -370,6 +384,8 @@ def main():
         nt_samples=20,
         stdevs=1.0
     )
+
+    stop
 
     attr_maps_dir = "individual_vargrad_maps_grayscale"
     device = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
