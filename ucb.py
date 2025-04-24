@@ -10,10 +10,15 @@ import os
 import gc
 import matplotlib.pyplot as plt
 from torchvision.io import read_image
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import resnet50 #, ResNet50_Weights
 
-
-device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
+    try:
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+    except ImportError:
+        pass
 print(f"Using device: {device}")
 
 def ensure_dir_exists(file_path):
@@ -398,7 +403,7 @@ def generate_importance_map_ucb(
     # 3) For each ground-truth label in the filename, do the UCB approach
     info_maps = {}
     for label in gt_labels:
-        #if label == gt_labels[1]:
+        #if label == gt_labels[0]:
         #    continue
         try:
             label_idx = labels.index(label)
@@ -491,10 +496,19 @@ def main():
     #IMAGE_PATH = "images2explain/Zebra_Lion.png"
     #IMAGE_PATH = "images2explain/Lion_Horse.png"
     IMAGE_PATH = "images2explain/bull mastiff_tabby.png"
-
-    weights = ResNet50_Weights.DEFAULT
-    labels = weights.meta["categories"]
-    model = resnet50(weights=weights)
+    
+    try:
+        from torchvision.models import ResNet50_Weights
+        weights = ResNet50_Weights.DEFAULT
+        labels = weights.meta["categories"]
+        model = resnet50(weights=weights)
+    except ImportError:
+        model = resnet50(pretrained=True)
+        import json
+        import urllib.request
+        LABELS_URL = "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
+        labels = urllib.request.urlopen(LABELS_URL).read().decode("utf-8").splitlines()
+    
     model.eval()
     model.to(device)
 
@@ -510,10 +524,10 @@ def main():
         reg_params=reg_params,
         ucb_iterations=0,
         top_percent=0.7,
-        batch_size_for_perturbations=4,
-        n_init=2,
+        batch_size_for_perturbations=3,
+        n_init=20,
         csv_path="ucb_log.csv",
-        calculate=True
+        calculate=False
     )
 
 if __name__ == "__main__":

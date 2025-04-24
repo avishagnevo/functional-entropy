@@ -19,9 +19,9 @@ class Perturbation:
         :param over_dim: over what dim to calculate the std. 0 for features over batch,  1 for over sample.
         :return: noisy tensor in the same shape as input
         """
-
-        #return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
-        return tens + torch.randn_like(tens)
+        torch.manual_seed(0)
+        return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
+        #return tens + torch.randn_like(tens)
 
     @classmethod
     def _add_noise_to_tensor_exept_pixel(cls, tens: torch.Tensor, pixel: int , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
@@ -183,7 +183,7 @@ class Perturbation:
     
     def perturb_tensor_subset(
         tens: torch.Tensor,
-        pixels: list[int],
+        pixels: List[int],
         n_samples: int,
         perturbation: bool = True,
         num_channels: int = 3,
@@ -319,6 +319,55 @@ class Regularization(object):
 
         return torch.mean(batch_statistics)
 
+    @classmethod
+    def get_image_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, estimation: str = 'var', softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Calculates the mean squared norm of gradients for each pixel group.
+        
+        Assumes grad is of shape (B, C, H, W) with B = n_samples * num_pixels, where each contiguous 
+        block of n_samples corresponds to a single pixel's perturbations.
+        
+        :param grad: Tensor of gradients with shape (B, C, H, W)
+        :param n_samples: Number of perturbations per pixel.
+        :param estimation: If 'var', return the per-group mean squared norm as a vector. if 'ent', return the
+        per-group mean squared norm divided by the corresponding softmax probability. Otherwise, return the overall mean (scalar).
+        :param softmax_prob: Tensor of shape (B,) with the softmax probabilities for each perturbation.
+        :return: Tensor of shape (num_pixels,) if estimation=='var', else a scalar.
+        """
+        B, C, H, W = grad.shape
+        num_pixels = B // n_samples  # number of groups (pixels)
+        
+        # Reshape to (num_pixels, n_samples, C, H, W)
+        grad_grouped = grad.view(num_pixels, n_samples, C, H, W)
+        
+        # Compute the squared L2 norm for each sample in the group; result shape: (num_pixels, n_samples, H, W)
+        group_norms_sq = torch.norm(grad_grouped, p=2, dim=2) ** 2
+        ##
+        #group_sum_sq = grad_grouped.sum(dim=(2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = (grad_grouped**2).sum(dim=(2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = grad_grouped.sum(dim=(1,2,3,4))  # shape: (num_pixels,n_samples)
+        #group_sum_sq = (grad_grouped**2).sum(dim=(1,2,3,4))  # shape: (num_pixels,n_samples)
+        ##
+        
+        if estimation == 'var':
+            # Mean over the perturbations' squared norms
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,H, W)    
+            return mean_sq_norm  # per-pixel vector of mean squared norms
+        elif estimation == 'ent':
+            # Devide sq_norm by correspoding softmax_prob, and then calculate the mean
+            assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
+            # Normalize by the softmax probability for each group
+            group_norms_sq_normalized = group_norms_sq / softmax_prob.view(num_pixels, n_samples)
+            # Mean over the perturbations for each pixel
+            mean_sq_norm_normalized = group_norms_sq_normalized.mean(dim=1)  # shape: (num_pixels,H, W)
+            return mean_sq_norm_normalized  # per-pixel vector of mean squared norms
+        else:
+            # Mean over all
+            stop
+            mean_sq_norm = group_norms_sq.mean(dim=1)  # shape: (num_pixels,)   v
+            return mean_sq_norm.mean()  # overall scalar average
+        
+        
     @classmethod
     def get_importance_by_estimation(cls, grad: torch.Tensor, n_samples: int, estimation: str = 'var', softmax_prob: Optional[torch.Tensor] = None) -> torch.Tensor:
         """

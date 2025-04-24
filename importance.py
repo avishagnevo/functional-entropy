@@ -12,17 +12,23 @@ from data import get_train_data, get_valid_data
 from typing import List , Optional 
 import json
 import matplotlib.pyplot as plt
-import functorch
-import psutil
+#import functorch
+#import psutil
 import gc
 import time
-from torch.func import jvp, vmap
+#from torch.func import jvp, vmap
 
 #from functorch import vmap, grad
 
 # Automatically set the device (GPU if available, else CPU)
-device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
+    try:
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+    except ImportError:
+        pass
+print(f"Using device: {device}")
 
 def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, label_idx: int) -> torch.Tensor:
     """
@@ -37,26 +43,31 @@ def compute_per_sample_gradient(model: torch.nn.Module, images: torch.Tensor, la
     def f(x: torch.Tensor) -> torch.Tensor:
         # x has shape (C, H, W); add batch dimension
         out = model(x.unsqueeze(0))              # shape: (1, num_classes)
-        #out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
-        #probab = out_sm[0, label_idx]                # shape: (1,)
-        probab = out[0, label_idx]                # shape: (1,)
-        return probab              # return the probability for the specified label
+        out_sm = F.softmax(out, dim=1)             # shape: (1, num_classes)
+        probab = out_sm[0, label_idx]                # shape: (1,)
+        #probab = out[0, label_idx]                # shape: (1,)
+        return probab  # return the probability for the specified label
 
-    if not torch.cuda.is_available():
-        grad_f = torch.func.grad(f)
-        per_sample_grad = torch.vmap(grad_f)(images)  # shape: (B, C, H, W)
-    else:
-        grad_f = functorch.grad(f)
-        per_sample_grad = functorch.vmap(grad_f)(images)  # shape: (B, C, H, W)
 
-    return per_sample_grad
+    with torch.autograd.set_grad_enabled(True):
+        # runs forward pass
+        outputs = compute_softmax_prob(model, images, label_idx)
+        assert outputs[0].numel() == 1, (
+        "Target not provided when necessary, cannot"
+        " take gradient with respect to multiple outputs."
+        )
+        # torch.unbind(forward_out) is a list of scalar tensor tuples and
+        # contains batch_size * #steps elements
+        grads = torch.autograd.grad(torch.unbind(outputs), images)[0]
+
+    return grads  # shape: (B, C, H, W)
 
 
 def compute_per_pixel_gradient(
     model: torch.nn.Module,
     images: torch.Tensor,
     label_idx: int,
-    pixels: list[int],
+    pixels: List[int],
     n_samples: int
 ) -> torch.Tensor:
     """
@@ -77,7 +88,7 @@ def compute_per_pixel_gradient(
         #probab = out[0, label_idx]
         return probab
 
-    if not torch.cuda.is_available():
+    if True: #not torch.cuda.is_available():
         #grad_f = torch.func.grad(f)
         #grads = torch.vmap(grad_f)(images)       # shape: (B_total, C, H, W)
 
@@ -92,7 +103,6 @@ def compute_per_pixel_gradient(
             # torch.unbind(forward_out) is a list of scalar tensor tuples and
             # contains batch_size * #steps elements
             grads = torch.autograd.grad(torch.unbind(outputs), images)[0]
-        ###    
     else:
         grad_f = functorch.grad(f)
         grads = functorch.vmap(grad_f)(images)
@@ -127,11 +137,14 @@ def compute_softmax_prob(model: torch.nn.Module, images: torch.Tensor, label_idx
     :param label_idx: The index of the label for which to compute the probability.
     :return: A tensor of shape (B,) with the softmax probability for each image.
     """
+    print(label_idx)
+    print('********')
     # Compute the output logits for each image
     logits = model(images)
     
     # Compute the softmax probabilities for the specified label
     softmax_probs = F.softmax(logits, dim=1)[:, label_idx]
+    print(softmax_probs)
     
     return softmax_probs
 
@@ -271,7 +284,7 @@ def load_config(config_path: str) -> dict:
     return config
 
 
-def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: list[int], 
+def compute_subset_importance(model: nn.Module, images: torch.Tensor, pixels: List[int], 
                               label_idx: int, reg_params: RegParameters) -> float:
     """
     Computes the importance measure for a subset of pixels for a given label by perturbing the images
