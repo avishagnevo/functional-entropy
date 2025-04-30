@@ -357,6 +357,11 @@ class Regularization(object):
             # Devide sq_norm by correspoding softmax_prob, and then calculate the mean
             assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
             # Normalize by the softmax probability for each group
+            print('####')
+            print(softmax_prob.shape)
+            print(group_norms_sq.shape)
+            print(softmax_prob.view(num_pixels, n_samples).shape)
+            print(softmax_prob)
             group_norms_sq_normalized = group_norms_sq / softmax_prob.view(num_pixels, n_samples)
             # Mean over the perturbations for each pixel
             mean_sq_norm_normalized = group_norms_sq_normalized.mean(dim=1)  # shape: (num_pixels,H, W)
