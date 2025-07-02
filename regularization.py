@@ -19,9 +19,9 @@ class Perturbation:
         :param over_dim: over what dim to calculate the std. 0 for features over batch,  1 for over sample.
         :return: noisy tensor in the same shape as input
         """
-        torch.manual_seed(0)
-        return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
-        #return tens + torch.randn_like(tens)
+        #torch.manual_seed(0)
+        #return tens + torch.randn_like(tens) * tens.std(dim=over_dim)
+        return tens + torch.randn_like(tens)
 
     @classmethod
     def _add_noise_to_tensor_exept_pixel(cls, tens: torch.Tensor, pixel: int , num_channels: int=3, over_dim: int = 0) -> torch.Tensor:
@@ -357,6 +357,11 @@ class Regularization(object):
             # Devide sq_norm by correspoding softmax_prob, and then calculate the mean
             assert softmax_prob is not None, "softmax_prob must be provided for 'ent' estimation"
             # Normalize by the softmax probability for each group
+            print('####')
+            print(softmax_prob.shape)
+            print(group_norms_sq.shape)
+            print(softmax_prob.view(num_pixels, n_samples).shape)
+            print(softmax_prob)
             group_norms_sq_normalized = group_norms_sq / softmax_prob.view(num_pixels, n_samples)
             # Mean over the perturbations for each pixel
             mean_sq_norm_normalized = group_norms_sq_normalized.mean(dim=1)  # shape: (num_pixels,H, W)
